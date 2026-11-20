@@ -42,7 +42,7 @@ create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.make_profile();
 
 -- Places: areas, sectors, boulders, problems and gym walls
--- (packages/hibi_climbing/lib/places/place.dart). parent_id is text with no
+-- (packages/climbing/lib/places/place.dart). parent_id is text with no
 -- foreign key, because a parent can be an OpenStreetMap place bundled with
 -- the app rather than a row here.
 create table if not exists public.places (

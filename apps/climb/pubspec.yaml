@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.2.0+2
+version: 0.3.0+3
 
 environment:
   sdk: ^3.13.5
@@ -34,16 +34,16 @@ dependencies:
     sdk: flutter
   path_provider: ^2.1.6
   file_picker: ^13.1.0
-  hibi_protocol:
-    path: ../../packages/hibi_protocol
-  hibi_climbing:
-    path: ../../packages/hibi_climbing
-  hibi_climbing_ui:
-    path: ../../packages/hibi_climbing_ui
-  hibi_climbing_map:
-    path: ../../packages/hibi_climbing_map
-  hibi_climbing_cloud:
-    path: ../../packages/hibi_climbing_cloud
+  module_protocol:
+    path: ../../packages/module_protocol
+  climbing:
+    path: ../../packages/climbing
+  climbing_ui:
+    path: ../../packages/climbing_ui
+  climbing_map:
+    path: ../../packages/climbing_map
+  climbing_cloud:
+    path: ../../packages/climbing_cloud
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

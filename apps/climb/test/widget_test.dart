@@ -6,10 +6,10 @@ import 'package:climb/storage/text_box_io.dart';
 import 'package:climb/shared_places.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hibi_climbing/climbing.dart';
-import 'package:hibi_climbing/places/place.dart';
-import 'package:hibi_climbing_map/climbing_map.dart';
-import 'package:hibi_climbing_ui/climbing_ui.dart';
+import 'package:climbing/climbing.dart';
+import 'package:climbing/places/place.dart';
+import 'package:climbing_map/climbing_map.dart';
+import 'package:climbing_ui/climbing_ui.dart';
 
 void main() {
   late Directory dir;

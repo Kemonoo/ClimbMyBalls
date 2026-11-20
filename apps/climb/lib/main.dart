@@ -1,5 +1,5 @@
 // Climb: the standalone climbing app (docs/architecture/climbing-extraction.md,
-// step 5). The same screens as hibi's climbing module (packages/hibi_climbing_ui),
+// step 5). The same screens as hibi's climbing module (packages/climbing_ui),
 // over its own store. "Export for hibi" writes the climbs as hibi protocol
 // events, which hibi imports (step 6).
 import 'dart:convert';
@@ -8,9 +8,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:hibi_climbing_cloud/climbing_cloud.dart';
-import 'package:hibi_climbing_map/climbing_map.dart';
-import 'package:hibi_climbing_ui/climbing_ui.dart';
+import 'package:climbing_cloud/climbing_cloud.dart';
+import 'package:climbing_map/climbing_map.dart';
+import 'package:climbing_ui/climbing_ui.dart';
 
 
 import 'climb_host.dart';

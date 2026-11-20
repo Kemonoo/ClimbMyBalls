@@ -1,0 +1,19 @@
+name: climbing_ui
+description: The climbing screens (docs/architecture/climbing-extraction.md, step 4), used inside hibi and by the standalone climbing app.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.9.0
+  flutter: ">=3.32.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  url_launcher: ^6.3.0
+  climbing:
+    path: ../climbing
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

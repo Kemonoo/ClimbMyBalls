@@ -7,7 +7,7 @@ import 'package:climb/shared_places.dart';
 import 'package:climb/update/update.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hibi_climbing_ui/climbing_ui.dart';
+import 'package:climbing_ui/climbing_ui.dart';
 
 void main() {
   late Directory dir;

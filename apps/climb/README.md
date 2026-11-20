@@ -1,6 +1,6 @@
 # Climb
 
-The standalone climbing app (docs/architecture/climbing-extraction.md, step 5; docs/climb/plan.md). The same climbing screens as hibi's module (`packages/hibi_climbing_ui`) plus the map (`packages/hibi_climbing_map`). Climbs are saved on the device as hibi protocol events (`climb_events.json`, docs/protocol/v0.1.md).
+The standalone climbing app (docs/architecture/climbing-extraction.md, step 5; docs/climb/plan.md). The same climbing screens as hibi's module (`packages/climbing_ui`) plus the map (`packages/climbing_map`). Climbs are saved on the device as hibi protocol events (`climb_events.json`, docs/protocol/v0.1.md).
 
 - **Climbs** tab: sessions, logging, stats. "Export for hibi" (top right) writes the climbs as events; hibi imports them.
 - **Friends** tab: sign in or make an account (email and password) to share places with friends. The feed comes later.

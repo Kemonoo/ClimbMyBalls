@@ -89,6 +89,34 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.0"
+  climbing:
+    dependency: "direct main"
+    description:
+      path: "../../packages/climbing"
+      relative: true
+    source: path
+    version: "0.1.0"
+  climbing_cloud:
+    dependency: "direct main"
+    description:
+      path: "../../packages/climbing_cloud"
+      relative: true
+    source: path
+    version: "0.1.0"
+  climbing_map:
+    dependency: "direct main"
+    description:
+      path: "../../packages/climbing_map"
+      relative: true
+    source: path
+    version: "0.1.0"
+  climbing_ui:
+    dependency: "direct main"
+    description:
+      path: "../../packages/climbing_ui"
+      relative: true
+    source: path
+    version: "0.1.0"
   clock:
     dependency: transitive
     description:
@@ -477,41 +505,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.8"
-  hibi_climbing:
-    dependency: "direct main"
-    description:
-      path: "../../packages/hibi_climbing"
-      relative: true
-    source: path
-    version: "0.1.0"
-  hibi_climbing_cloud:
-    dependency: "direct main"
-    description:
-      path: "../../packages/hibi_climbing_cloud"
-      relative: true
-    source: path
-    version: "0.1.0"
-  hibi_climbing_map:
-    dependency: "direct main"
-    description:
-      path: "../../packages/hibi_climbing_map"
-      relative: true
-    source: path
-    version: "0.1.0"
-  hibi_climbing_ui:
-    dependency: "direct main"
-    description:
-      path: "../../packages/hibi_climbing_ui"
-      relative: true
-    source: path
-    version: "0.1.0"
-  hibi_protocol:
-    dependency: "direct main"
-    description:
-      path: "../../packages/hibi_protocol"
-      relative: true
-    source: path
-    version: "0.1.0"
   hooks:
     dependency: transitive
     description:
@@ -728,6 +721,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.0"
+  module_protocol:
+    dependency: "direct main"
+    description:
+      path: "../../packages/module_protocol"
+      relative: true
+    source: path
+    version: "0.1.0"
   objective_c:
     dependency: transitive
     description:

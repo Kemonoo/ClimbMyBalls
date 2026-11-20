@@ -1,7 +1,7 @@
 # Checking 006_roles.sql by hand
 
 The Dart copy of the rules is tested in
-`packages/hibi_climbing_cloud/test/rights_test.dart`. These checks prove the
+`packages/climbing_cloud/test/rights_test.dart`. These checks prove the
 database agrees. Run each block in Supabase → SQL Editor; every block ends in
 `rollback`, so nothing stays. Replace `<owner>`, `<friend>`, `<other>` with
 user ids from `select id, name, is_owner, approved from profiles;`

@@ -1,0 +1,10 @@
+name: module_protocol
+description: The hibi protocol v0.1 (docs/protocol/v0.1.md) - events, module manifests, sources, goals, metrics. Pure Dart, shared by hibi, module packages and standalone module apps.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.9.0
+
+dev_dependencies:
+  test: ^1.25.0

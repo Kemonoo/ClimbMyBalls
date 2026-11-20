@@ -1,0 +1,15 @@
+name: climbing
+description: Climbing as a hibi module (docs/architecture/climbing-extraction.md) - grades, sessions, places, levels, the TopLogger import, and its protocol events. Pure Dart, used inside hibi and by the standalone climbing app.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  http: ^1.2.0
+  module_protocol:
+    path: ../module_protocol
+
+dev_dependencies:
+  test: ^1.25.0

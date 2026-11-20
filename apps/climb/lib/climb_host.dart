@@ -4,8 +4,8 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:hibi_climbing_ui/climbing_ui.dart';
-import 'package:hibi_protocol/hibi_protocol.dart';
+import 'package:climbing_ui/climbing_ui.dart';
+import 'package:module_protocol/module_protocol.dart';
 
 import 'storage/text_box.dart';
 

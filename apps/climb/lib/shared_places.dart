@@ -9,13 +9,13 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
-import 'package:hibi_climbing/climbing.dart';
-import 'package:hibi_climbing/places/place.dart';
-import 'package:hibi_climbing/store.dart';
-import 'package:hibi_climbing/places/place_tree.dart';
-import 'package:hibi_climbing/places/topo.dart';
-import 'package:hibi_climbing_cloud/climbing_cloud.dart';
-import 'package:hibi_climbing_map/climbing_map.dart';
+import 'package:climbing/climbing.dart';
+import 'package:climbing/places/place.dart';
+import 'package:climbing/store.dart';
+import 'package:climbing/places/place_tree.dart';
+import 'package:climbing/places/topo.dart';
+import 'package:climbing_cloud/climbing_cloud.dart';
+import 'package:climbing_map/climbing_map.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'storage/text_box.dart';
@@ -181,7 +181,7 @@ class SharedPlaces extends ChangeNotifier {
 
 /// The map's editor: saves to the shared database, then fetches the change
 /// so it shows at once.
-class CloudPlaceEditor implements PlaceEditor {
+class CloudPlaceEditor extends PlaceEditor {
   CloudPlaceEditor(this.places);
   final SharedPlaces places;
 
@@ -264,6 +264,57 @@ class CloudPlaceEditor implements PlaceEditor {
   Future<List<Ascent>> ascentsOf(String problemId) async => [
     for (final t in await _cloud.ticksOf(problemId)) (id: t.id, userId: t.userId, who: nameOf(t.userId), day: t.day, outcome: t.outcome),
   ];
+
+  @override
+  Future<List<Opinion>> opinionsOf(String problemId) async => [
+    for (final o in await _cloud.opinionsOf(problemId)) (userId: o.userId, who: nameOf(o.userId), grade: o.grade, stars: o.stars, tags: o.tags, project: o.project),
+  ];
+
+  @override
+  Future<String?> setOpinion(String problemId, {required String grade, required int stars, required List<String> tags, required bool project}) async {
+    try {
+      await _cloud.setOpinion(problemId, grade: grade, stars: stars, tags: tags, project: project);
+      return null;
+    } catch (e) {
+      return 'Could not save it. Check your connection. ($e)';
+    }
+  }
+
+  @override
+  Future<List<(String, Opinion)>> opinionsOn(List<String> problemIds) async => [
+    for (final o in await _cloud.opinionsOn(problemIds)) (o.problemId, (userId: o.userId, who: nameOf(o.userId), grade: o.grade, stars: o.stars, tags: o.tags, project: o.project)),
+  ];
+
+  @override
+  Future<Set<String>> toppedByMe() async => {
+    for (final t in await _cloud.myTicks())
+      if (t.outcome != 'tried') t.problemId,
+  };
+
+  @override
+  Future<List<RouteComment>> commentsOf(String problemId) async => [
+    for (final c in await _cloud.commentsOf(problemId)) (id: c.id, userId: c.userId, who: nameOf(c.userId), body: c.body, at: c.createdAt.toLocal()),
+  ];
+
+  @override
+  Future<String?> addComment(String problemId, String body) async {
+    try {
+      await _cloud.addComment(problemId, body);
+      return null;
+    } catch (e) {
+      return 'Could not post it. Check your connection. ($e)';
+    }
+  }
+
+  @override
+  Future<String?> removeComment(String id) async {
+    try {
+      await _cloud.removeComment(id);
+      return null;
+    } catch (e) {
+      return 'Could not remove it. ($e)';
+    }
+  }
 
   @override
   Future<String?> logAscent(String problemId, String outcome) async {

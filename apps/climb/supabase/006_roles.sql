@@ -17,7 +17,7 @@
 -- everyone else; an approver can't take approve from another approver; an
 -- editor can take edit away only inside their place and only from someone
 -- whose own edit doesn't reach as high. You can always give up your own.
--- The same rules live in packages/hibi_climbing_cloud/lib/src/rights.dart
+-- The same rules live in packages/climbing_cloud/lib/src/rights.dart
 -- (the app uses them to show only the buttons that will work).
 
 -- The owner: today's admin flag becomes the owner flag.
