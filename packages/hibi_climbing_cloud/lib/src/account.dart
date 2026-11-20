@@ -3,8 +3,12 @@ part of '../climbing_cloud.dart';
 /// Signed out: sign in or make an account. Signed in: who you are, and
 /// signing out. [cloud] is null when the build has no keys.
 class AccountPanel extends StatefulWidget {
-  const AccountPanel({super.key, required this.cloud});
+  const AccountPanel({super.key, required this.cloud, this.places});
   final CloudAccount? cloud;
+
+  /// The places an edit right can cover (areas, sectors, boulders, walls),
+  /// read when needed; null shows no edit rights to give.
+  final List<ScopePlace> Function()? places;
 
   @override
   State<AccountPanel> createState() => _AccountPanelState();
@@ -61,7 +65,7 @@ class _AccountPanelState extends State<AccountPanel> {
     if (c == null) {
       return const _Padded(children: [Text('This build has no server keys, so nothing is shared. Your climbs stay on this phone.')]);
     }
-    if (c.email != null) return _SignedIn(cloud: c);
+    if (c.email != null) return _SignedIn(cloud: c, places: widget.places);
     return _Padded(children: [
       Text(_newAccount ? 'Make an account' : 'Sign in', style: text.titleLarge),
       const SizedBox(height: 4),
@@ -134,98 +138,3 @@ class _Padded extends StatelessWidget {
   Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(20), children: children);
 }
 
-/// Signed in: who you are, whether you're approved, and for admins the
-/// accounts waiting to be let in.
-class _SignedIn extends StatefulWidget {
-  const _SignedIn({required this.cloud});
-  final CloudAccount cloud;
-
-  @override
-  State<_SignedIn> createState() => _SignedInState();
-}
-
-class _SignedInState extends State<_SignedIn> {
-  CloudProfile? _me;
-  List<CloudProfile> _all = const [];
-  String? _error;
-  var _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    try {
-      final me = await widget.cloud.myProfile();
-      final all = me?.isAdmin == true ? await widget.cloud.allProfiles() : const <CloudProfile>[];
-      if (!mounted) return;
-      setState(() {
-        _me = me;
-        _all = all;
-        _error = null;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = 'Could not reach the server. ($e)';
-        _loading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final c = widget.cloud;
-    final me = _me;
-    final waiting = [for (final p in _all) if (!p.approved) p];
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: _Padded(children: [
-        Text('Signed in as ${me?.name ?? c.name}', style: text.titleLarge),
-        Text(c.email ?? '', style: text.bodyMedium),
-        const SizedBox(height: 12),
-        if (_loading)
-          const LinearProgressIndicator()
-        else if (_error != null)
-          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))
-        else if (me == null || !me.approved)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Waiting to be let in', style: text.titleMedium),
-                const SizedBox(height: 4),
-                const Text('Climb is for a small group of friends. Ask the owner to approve your account, then pull down here to check.'),
-                const SizedBox(height: 8),
-                OutlinedButton(onPressed: _load, child: const Text('Check again')),
-              ]),
-            ),
-          )
-        else if (me.isAdmin) ...[
-          Text(waiting.isEmpty ? 'Nobody is waiting to be let in.' : '${waiting.length} waiting to be let in', style: text.titleMedium),
-          for (final p in _all)
-            if (p.id != me.id)
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(p.name.isEmpty ? 'No name' : p.name),
-                subtitle: Text(p.approved ? 'Let in' : 'Waiting'),
-                value: p.approved,
-                onChanged: (v) async {
-                  final err = await c.setApproved(p.id, v);
-                  if (!context.mounted) return;
-                  if (err != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
-                  _load();
-                },
-              ),
-        ],
-        const SizedBox(height: 16),
-        OutlinedButton.icon(onPressed: () => c.signOut(), icon: const Icon(Icons.logout), label: const Text('Sign out')),
-      ]),
-    );
-  }
-}

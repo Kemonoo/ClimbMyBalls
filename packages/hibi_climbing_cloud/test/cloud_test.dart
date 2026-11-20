@@ -55,13 +55,28 @@ class _FakeAccount implements CloudAccount {
   }
   final others = <CloudProfile>[const CloudProfile(id: 'u2', name: 'Jano')];
   @override
-  Future<CloudProfile?> myProfile() async => email == null ? null : CloudProfile(id: 'u1', name: name, approved: approved, isAdmin: admin);
+  Future<CloudProfile?> myProfile() async => email == null ? null : CloudProfile(id: 'u1', name: name, approved: approved, isOwner: admin);
   @override
   Future<List<CloudProfile>> allProfiles() async => [(await myProfile())!, ...others];
   @override
   Future<String?> setApproved(String id, bool yes) async {
     final i = others.indexWhere((p) => p.id == id);
     others[i] = CloudProfile(id: id, name: others[i].name, approved: yes);
+    return null;
+  }
+
+  final grants = <Grant>[];
+  @override
+  Future<List<Grant>> allGrants() async => List.of(grants);
+  @override
+  Future<String?> grant(String userId, RightKind kind, {String? placeId}) async {
+    grants.add(Grant(id: 'g${grants.length}', userId: userId, kind: kind, placeId: placeId));
+    return null;
+  }
+
+  @override
+  Future<String?> revoke(String grantId) async {
+    grants.removeWhere((g) => g.id == grantId);
     return null;
   }
 }
@@ -151,10 +166,56 @@ void main() {
     await t.pumpWidget(MaterialApp(home: Scaffold(body: AccountPanel(key: const ValueKey('owner'), cloud: owner))));
     await t.pumpAndSettle();
     expect(find.text('1 waiting to be let in'), findsOneWidget);
-    await t.tap(find.byType(Switch));
+    await t.tap(find.byTooltip('Rights for Jano'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Let in'));
     await t.pumpAndSettle();
     expect(owner.others.single.approved, isTrue);
     expect(find.text('Nobody is waiting to be let in.'), findsOneWidget);
+  });
+
+  testWidgets('the owner gives a friend an edit right on a place from their row, and takes it away', (t) async {
+    final owner = _FakeAccount()
+      ..email = 'm@example.com'
+      ..name = 'Alex'
+      ..admin = true;
+    owner.others[0] = const CloudProfile(id: 'u2', name: 'Jano', approved: true);
+    const places = [
+      (id: 'a1', label: 'Devín · Area', parentId: null),
+      (id: 'b1', label: 'Lúčka · Boulder', parentId: 'a1'),
+    ];
+    await t.pumpWidget(MaterialApp(home: Scaffold(body: AccountPanel(cloud: owner, places: () => places))));
+    await t.pumpAndSettle();
+    expect(find.text('You own Climb: every right is yours.'), findsOneWidget);
+    await t.tap(find.byTooltip('Rights for Jano'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Give a right…'));
+    await t.pumpAndSettle();
+    expect(find.text('Give Jano a right'), findsOneWidget);
+    await t.tap(find.byType(DropdownMenu<String>));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Lúčka · Boulder').last);
+    await t.pumpAndSettle();
+    await t.tap(find.text('Give'));
+    await t.pumpAndSettle();
+    expect(owner.grants.single.placeId, 'b1');
+    expect(find.text('Let in · Edits Lúčka · Boulder'), findsOneWidget);
+
+    await t.tap(find.byTooltip('Rights for Jano'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Take away: Edits Lúčka · Boulder'));
+    await t.pumpAndSettle();
+    expect(owner.grants, isEmpty);
+  });
+
+  testWidgets('someone without rights gets no menu on anyone', (t) async {
+    final a = _FakeAccount()
+      ..email = 'j@example.com'
+      ..name = 'Jano';
+    await t.pumpWidget(MaterialApp(home: Scaffold(body: AccountPanel(cloud: a))));
+    await t.pumpAndSettle();
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+    expect(find.textContaining('waiting to be let in'), findsNothing);
   });
 
     testWidgets('Continue with Google shows only where it works, and signs in', (t) async {

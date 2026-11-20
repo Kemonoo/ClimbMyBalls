@@ -31,7 +31,7 @@ Admins change and delete anything; others only what they added (`supabase/003_ad
 
 ## Sections and guides
 
-A boulder's photos are its sections ("lúčka 01"): routes are drawn on them and a route can be on several. A section can keep a second photo, such as a printed guide's page. `assets/guides/devin/` can hold a guide (photos plus `guide.json`) that an admin adds to a boulder; this repository ships it empty, since guide photos belong to their authors.
+A boulder's photos are its sections ("lúčka 01"): routes are drawn on them and a route can be on several. A section can keep a second photo, such as a printed guide's page. `assets/guides/devin/` can hold a guide (photos plus `guide.json`) that an admin adds to a boulder; the public repository ships it empty, since guide photos belong to their authors.
 
 With a guide in that folder, `flutter run -d windows --dart-define=CLIMB_PREVIEW=devin` opens its sections without the server, to check the screens.
 
@@ -51,3 +51,6 @@ Without the file the map still works, just with no background map.
 
 The same app runs in a browser (iPhones, any phone, PCs): `flutter build web --base-href /ClimbMyBalls/ --dart-define-from-file=<keys>`. Its storage is the browser's (`lib/storage/`); Google sign-in there goes through Google's page and back (Supabase → Authentication → URL Configuration must list the site's address).
 
+## Versions and updates
+
+Climb has its own version (`pubspec.yaml`, and `kClimbVersion` in `lib/update/update.dart`). Releases are public, on the ClimbMyBalls repository's Releases page; the Android app checks there on start and offers to install a newer one (the ⟳ button on the Climbs tab checks by hand). To release: bump both, merge, then run `tool/climb_release.sh "what's new"` from the monorepo.

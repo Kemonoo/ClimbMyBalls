@@ -823,8 +823,8 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
                 ),
                 SegmentedButton<_Tool>(
                   segments: const [
-                    ButtonSegment(value: _Tool.route, label: Text('Routes'), icon: Icon(Icons.timeline)),
-                    ButtonSegment(value: _Tool.letters, label: Text('Letters'), icon: Icon(Icons.abc)),
+                    ButtonSegment(value: _Tool.route, label: Text('Routes', maxLines: 1, softWrap: false), icon: Icon(Icons.timeline)),
+                    ButtonSegment(value: _Tool.letters, label: Text('Letters', maxLines: 1, softWrap: false), icon: Icon(Icons.abc)),
                   ],
                   selected: {_tool},
                   showSelectedIcon: false,

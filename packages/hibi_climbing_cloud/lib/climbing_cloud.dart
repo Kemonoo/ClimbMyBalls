@@ -23,6 +23,8 @@ export 'package:supabase_flutter/supabase_flutter.dart' show User;
 
 part 'src/rows.dart';
 part 'src/account.dart';
+part 'src/rights.dart';
+part 'src/people.dart';
 
 /// The project's public URL and key, from `--dart-define-from-file`.
 class CloudConfig {
@@ -71,21 +73,34 @@ abstract class CloudAccount {
   /// Every account, for admins approving new ones.
   Future<List<CloudProfile>> allProfiles();
 
-  /// Admins only. Null when it worked, else a message.
+  /// Approvers only. Null when it worked, else a message.
   Future<String?> setApproved(String id, bool yes);
+
+  /// Everyone's rights (empty before 006_roles.sql has run).
+  Future<List<Grant>> allGrants();
+
+  /// Gives [userId] a right; [placeId] only for [RightKind.edit]. Null when
+  /// it worked, else a message.
+  Future<String?> grant(String userId, RightKind kind, {String? placeId});
+
+  /// Takes a right away. Null when it worked, else a message.
+  Future<String?> revoke(String grantId);
 }
 
 /// An account as friends see it, and whether it may use the shared data.
 class CloudProfile {
-  const CloudProfile({required this.id, required this.name, this.approved = false, this.isAdmin = false});
+  const CloudProfile({required this.id, required this.name, this.approved = false, this.isOwner = false});
   final String id, name;
-  final bool approved, isAdmin;
+
+  /// [isOwner]: the account that made Climb; it holds every right.
+  final bool approved, isOwner;
 
   factory CloudProfile.fromRow(Map<String, dynamic> r) => CloudProfile(
     id: r['id'] as String,
     name: r['name'] as String? ?? '',
     approved: r['approved'] as bool? ?? false,
-    isAdmin: r['is_admin'] as bool? ?? false,
+    // before 006_roles.sql the owner was the one admin
+    isOwner: r['is_owner'] as bool? ?? r['is_admin'] as bool? ?? false,
   );
 }
 
@@ -194,6 +209,37 @@ class ClimbCloud implements CloudAccount {
     try {
       await db.rpc('set_approved', params: {'uid': id, 'yes': yes});
       return null;
+    } catch (e) {
+      return 'Could not change it. ($e)';
+    }
+  }
+
+  /// Everyone's rights from the last [allGrants].
+  List<Grant> grants = const [];
+
+  @override
+  Future<List<Grant>> allGrants() async {
+    try {
+      return grants = [for (final r in await db.from('grants').select().order('created_at')) ?Grant.fromRow(r)];
+    } on PostgrestException {
+      return grants = const []; // 006_roles.sql not run yet
+    }
+  }
+
+  @override
+  Future<String?> grant(String userId, RightKind kind, {String? placeId}) =>
+      _call('grant_right', {'uid': userId, 'k': kind.name, 'pid': placeId});
+
+  @override
+  Future<String?> revoke(String grantId) => _call('revoke_right', {'grant_id': grantId});
+
+  Future<String?> _call(String fn, Map<String, Object?> params) async {
+    try {
+      await db.rpc(fn, params: params);
+      await allGrants();
+      return null;
+    } on PostgrestException catch (e) {
+      return e.message;
     } catch (e) {
       return 'Could not change it. ($e)';
     }

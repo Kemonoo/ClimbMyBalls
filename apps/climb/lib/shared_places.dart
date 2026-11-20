@@ -47,6 +47,14 @@ class SharedPlaces extends ChangeNotifier {
 
   PlaceTree get tree => _tree ??= PlaceTree([...bundled, ...cache.places]);
 
+  /// What an edit right can cover, for the Friends tab: areas and gyms,
+  /// sectors and walls, boulders.
+  List<ScopePlace> get scopePlaces => [
+    for (final p in [...bundled, ...cache.places])
+      if (const {PlaceKind.area, PlaceKind.sector, PlaceKind.boulder, PlaceKind.gymWall}.contains(p.kind))
+        (id: p.id, label: '${p.name} · ${kindLabel(p.kind)}', parentId: p.parentId),
+  ];
+
   /// Loads the bundled places and the phone's copy of the shared ones.
   static Future<SharedPlaces> load({ClimbCloud? cloud, TextBox? cacheFile, ClimbingStore? store}) async {
     final raw = jsonDecode(await rootBundle.loadString('assets/places/sk.json', cache: false)) as List;
@@ -95,6 +103,7 @@ class SharedPlaces extends ChangeNotifier {
           ..clear()
           ..addAll({for (final p in await c.allProfiles()) p.id: p.name});
       } catch (_) {} // names are a nicety
+      await c.allGrants();
       await syncTicks();
       problem = null;
       _save();
@@ -183,7 +192,22 @@ class CloudPlaceEditor implements PlaceEditor {
   @override
   String? get me => places.cloud?.user?.id;
   @override
-  bool get isAdmin => signedIn && (places.cloud?.me?.isAdmin ?? false);
+  bool get isAdmin => signedIn && _rights.isAdmin(me);
+  @override
+  bool mayEdit(String placeId) => signedIn && _rights.canEdit(me, placeId);
+
+  /// Your rights, reaching down the place tree.
+  Rights get _rights {
+    final c = places.cloud, id = me;
+    if (c == null || id == null) return Rights.none;
+    final t = places.tree;
+    return Rights(
+      owners: {if (c.me?.isOwner ?? false) id},
+      approved: {if (c.approved) id},
+      grants: c.grants,
+      parentOf: (p) => t[p]?.parentId,
+    );
+  }
   @override
   String? createdBy(String placeId) => places.cache.createdBy(placeId);
   @override
@@ -324,9 +348,10 @@ class CloudPlaceEditor implements PlaceEditor {
       final lines = [
         for (final l in (s['lines'] as List).cast<Map>()) TopoLine.fromJson({...l.cast<String, dynamic>(), 'problem': ids[l['route']]}),
       ];
+      final overlay = TopoOverlay.fromJson((s['overlay'] as Map?)?.cast<String, dynamic>());
       if (haveSections[s['name']] case final old?) {
         // already there: bring its letters and lines up to the guide's
-        await _cloud.saveTopo(old.copyWith(marks: marks, lines: lines));
+        await _cloud.saveTopo(old.copyWith(marks: marks, lines: lines, overlay: overlay));
         continue;
       }
       final id = newTopoId();
@@ -342,6 +367,7 @@ class CloudPlaceEditor implements PlaceEditor {
         height: s['height'] as int,
         marks: marks,
         lines: lines,
+        overlay: overlay,
       );
       await _cloud.saveTopo(topo);
     }

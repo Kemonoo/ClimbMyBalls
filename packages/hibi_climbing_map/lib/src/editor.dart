@@ -10,6 +10,10 @@ abstract class PlaceEditor {
 
   /// Admins may change and delete anything.
   bool get isAdmin;
+
+  /// A right of yours reaches this place: an edit right on it or on a place
+  /// above it (apps/climb/supabase/006_roles.sql).
+  bool mayEdit(String placeId);
   String? createdBy(String placeId);
   DateTime? createdAt(String placeId);
 
@@ -38,7 +42,7 @@ abstract class PlaceEditor {
 
   /// Logs your ascent today: 'flash', 'sent' or 'tried'.
   Future<String?> logAscent(String problemId, String outcome);
-    Future<String?> removeAscent(String id);
+  Future<String?> removeAscent(String id);
 
   /// Moves one of your ascents to another day.
   Future<String?> setAscentDay(String id, DateTime day);
@@ -51,10 +55,12 @@ abstract class PlaceEditor {
 /// One logged ascent, for a route's page.
 typedef Ascent = ({String id, String userId, String who, DateTime day, String outcome});
 
-/// You made it, or you're an admin.
-bool canEdit(PlaceEditor? e, String placeId) => e != null && e.signedIn && (e.isAdmin || (e.me != null && e.createdBy(placeId) == e.me));
+/// You made it, a right of yours reaches it, or you're an admin.
+bool canEdit(PlaceEditor? e, String placeId) =>
+    e != null && e.signedIn && (e.isAdmin || e.mayEdit(placeId) || (e.me != null && e.createdBy(placeId) == e.me));
 
-bool canEditTopo(PlaceEditor? e, Topo t) => e != null && e.signedIn && (e.isAdmin || (e.me != null && t.createdBy == e.me));
+/// The same for a section: by who made it, or by the place it hangs on.
+bool canEditTopo(PlaceEditor? e, Topo t) => e != null && e.signedIn && (e.isAdmin || e.mayEdit(t.placeId) || (e.me != null && t.createdBy == e.me));
 
 /// What a new place is, picked after its spot.
 typedef PlaceDraft = ({PlaceKind kind, String name, String? parentId, bool outline});
@@ -93,18 +99,22 @@ Future<PlaceDraft?> showNewPlaceSheet(BuildContext context, PlaceTree tree, LatL
             children: [
               Text('New place', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 12),
-              SegmentedButton<PlaceKind>(
-                segments: [
+              // a menu, not side-by-side buttons: the names never wrap
+              DropdownMenu<PlaceKind>(
+                initialSelection: kind,
+                expandedInsets: EdgeInsets.zero,
+                label: const Text('Kind'),
+                requestFocusOnTap: false,
+                leadingIcon: Icon(placeIcon(Place(id: '', kind: kind, name: ''))),
+                dropdownMenuEntries: [
                   for (final k in _newKinds)
-                    ButtonSegment(
+                    DropdownMenuEntry(
                       value: k,
-                      label: Text(kindLabel(k)),
-                      icon: Icon(placeIcon(Place(id: '', kind: k, name: ''))),
+                      label: kindLabel(k),
+                      leadingIcon: Icon(placeIcon(Place(id: '', kind: k, name: ''))),
                     ),
                 ],
-                selected: {kind},
-                showSelectedIcon: false,
-                onSelectionChanged: (s) => set(() => kind = s.first),
+                onSelected: (k) => set(() => kind = k ?? kind),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -254,8 +264,8 @@ Future<Place?> showNewProblemSheet(BuildContext context, Place boulder, String i
                 const SizedBox(height: 10),
                 SegmentedButton<GradeSystem>(
                   segments: const [
-                    ButtonSegment(value: GradeSystem.font, label: Text('Boulder · Font')),
-                    ButtonSegment(value: GradeSystem.uiaa, label: Text('Rope · UIAA')),
+                    ButtonSegment(value: GradeSystem.font, label: Text('Boulder', maxLines: 1, softWrap: false)),
+                    ButtonSegment(value: GradeSystem.uiaa, label: Text('Rope', maxLines: 1, softWrap: false)),
                   ],
                   selected: {scale},
                   showSelectedIcon: false,
@@ -277,16 +287,18 @@ Future<Place?> showNewProblemSheet(BuildContext context, Place boulder, String i
                   onSelected: (g) => set(() => grade = g),
                 ),
                 const SizedBox(height: 10),
-                SegmentedButton<_Start>(
-                  segments: const [
-                    ButtonSegment(value: _Start.stand, label: Text('Stand')),
-                    ButtonSegment(value: _Start.sit, label: Text('SD')),
-                    ButtonSegment(value: _Start.sitLow, label: Text('SD low')),
-                    ButtonSegment(value: _Start.sitHigh, label: Text('SD high')),
+                DropdownMenu<_Start>(
+                  initialSelection: start,
+                  expandedInsets: EdgeInsets.zero,
+                  label: const Text('Start'),
+                  requestFocusOnTap: false,
+                  dropdownMenuEntries: const [
+                    DropdownMenuEntry(value: _Start.stand, label: 'Stand'),
+                    DropdownMenuEntry(value: _Start.sit, label: 'Sit (SD)'),
+                    DropdownMenuEntry(value: _Start.sitLow, label: 'Sit, low (SD low)'),
+                    DropdownMenuEntry(value: _Start.sitHigh, label: 'Sit, high (SD high)'),
                   ],
-                  selected: {start},
-                  showSelectedIcon: false,
-                  onSelectionChanged: (s) => set(() => start = s.first),
+                  onSelected: (v) => set(() => start = v ?? start),
                 ),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,

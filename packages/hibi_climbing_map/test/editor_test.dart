@@ -18,6 +18,9 @@ class _Editor implements PlaceEditor {
   String? get me => 'u1';
   @override
   bool isAdmin = false;
+  final scoped = <String>{};
+  @override
+  bool mayEdit(String placeId) => scoped.contains(placeId);
   @override
   String? createdBy(String placeId) => saved.any((p) => p.id == placeId) ? 'u1' : null;
   @override
@@ -209,13 +212,16 @@ void main() {
     expect(find.text('Give it a name.'), findsOneWidget);
     expect(find.text('Pick a grade.'), findsOneWidget);
     await t.enterText(find.widgetWithText(TextField, 'Name'), 'Latrinátor');
-    await t.tap(find.text('Rope · UIAA'));
+    await t.tap(find.text('Rope'));
     await t.pump();
     await t.tap(find.byType(DropdownMenu<String>));
     await t.pumpAndSettle();
     await t.tap(find.text('3+/4-').last); // near the top of the list
     await t.pumpAndSettle();
-    await t.tap(find.text('SD low'));
+    await t.tap(find.text('Stand').first); // the start menu
+    await t.pumpAndSettle();
+    await t.tap(find.text('Sit, low (SD low)').last);
+    await t.pumpAndSettle();
     await t.ensureVisible(find.text('Save problem'));
     await t.tap(find.text('Save problem'));
     await t.pumpAndSettle();
@@ -296,6 +302,16 @@ void main() {
     expect(find.text('20 Dunaj'), findsOneWidget);
     expect(find.textContaining('start N, up to X'), findsOneWidget); // the row opened
     expect(find.byTooltip('Edit section'), findsOneWidget);
+  });
+
+  test('a right on a place lets you edit it and its sections, nothing else', () {
+    final e = _Editor([])..scoped.add('b1');
+    expect(canEdit(e, 'b1'), isTrue);
+    expect(canEdit(e, 'b2'), isFalse);
+    expect(canEditTopo(e, const Topo(id: 't1', placeId: 'b1', photoPath: 'u9/t1.jpg', createdBy: 'u9')), isTrue);
+    expect(canEditTopo(e, const Topo(id: 't2', placeId: 'b2', photoPath: 'u9/t2.jpg', createdBy: 'u9')), isFalse);
+    e.signedIn = false;
+    expect(canEdit(e, 'b1'), isFalse);
   });
 
   test('route numbers: their own first, then by name after them', () {
@@ -467,6 +483,8 @@ class _RefreshingEditor implements PlaceEditor {
   String? get me => e.me;
   @override
   bool get isAdmin => e.isAdmin;
+  @override
+  bool mayEdit(String id) => e.mayEdit(id);
   @override
   String? createdBy(String id) => e.createdBy(id);
   @override

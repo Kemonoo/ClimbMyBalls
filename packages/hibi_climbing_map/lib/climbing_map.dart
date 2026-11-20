@@ -824,8 +824,8 @@ extension on _ClimbMapScreenState {
               const SizedBox(height: 6),
               SegmentedButton<bool>(
                 segments: const [
-                  ButtonSegment(value: true, label: Text('Shape'), icon: Icon(Icons.crop_square)),
-                  ButtonSegment(value: false, label: Text('Tap points'), icon: Icon(Icons.touch_app_outlined)),
+                  ButtonSegment(value: true, label: Text('Shape', maxLines: 1, softWrap: false), icon: Icon(Icons.crop_square)),
+                  ButtonSegment(value: false, label: Text('Tap points', maxLines: 1, softWrap: false), icon: Icon(Icons.touch_app_outlined)),
                 ],
                 selected: {_shapeTool},
                 showSelectedIcon: false,

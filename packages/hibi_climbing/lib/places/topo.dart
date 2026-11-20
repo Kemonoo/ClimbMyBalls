@@ -30,6 +30,67 @@ class TopoMark {
   factory TopoMark.fromJson(Map<String, dynamic> j) => TopoMark(j['label'] as String? ?? '', TopoPoint((j['x'] as num).toDouble(), (j['y'] as num).toDouble()));
 }
 
+/// A guide's drawing of a whole section, drawn once on the overview: each
+/// stretch of rock as one [edges] entry, however many routes share it, the
+/// route numbers where the guide prints them, and bars under the starts.
+/// Each route's own line (in [Topo.lines]) is the path along these edges,
+/// shown on the route's page.
+class TopoOverlay {
+  const TopoOverlay({this.edges = const [], this.numbers = const [], this.bars = const []});
+
+  final List<TopoEdge> edges;
+  final List<TopoLabel> numbers;
+  final List<TopoPoint> bars;
+
+  bool get isEmpty => edges.isEmpty && numbers.isEmpty && bars.isEmpty;
+
+  Map<String, dynamic> toJson() => {
+    'edges': [for (final e in edges) e.toJson()],
+    'numbers': [for (final n in numbers) n.toJson()],
+    'bars': [for (final b in bars) b.toJson()],
+  };
+
+  factory TopoOverlay.fromJson(Map<String, dynamic>? j) => j == null
+      ? const TopoOverlay()
+      : TopoOverlay(
+          edges: [for (final e in (j['edges'] as List? ?? const [])) TopoEdge.fromJson((e as Map).cast<String, dynamic>())],
+          numbers: [for (final n in (j['numbers'] as List? ?? const [])) TopoLabel.fromJson((n as Map).cast<String, dynamic>())],
+          bars: [for (final b in (j['bars'] as List? ?? const [])) TopoPoint.fromJson(b as List)],
+        );
+}
+
+/// One drawn stretch between two junctions; [arrow] when it ends on top.
+class TopoEdge {
+  const TopoEdge(this.points, {this.color = '#ffffff', this.arrow = false});
+  final List<TopoPoint> points;
+  final String color;
+  final bool arrow;
+
+  Map<String, dynamic> toJson() => {
+    'pts': [for (final p in points) p.toJson()],
+    if (color != '#ffffff') 'color': color,
+    if (arrow) 'arrow': true,
+  };
+
+  factory TopoEdge.fromJson(Map<String, dynamic> j) => TopoEdge(
+    [for (final p in (j['pts'] as List? ?? const [])) TopoPoint.fromJson(p as List)],
+    color: j['color'] as String? ?? '#ffffff',
+    arrow: j['arrow'] == true,
+  );
+}
+
+/// A route number printed on the photo ('28.').
+class TopoLabel {
+  const TopoLabel(this.text, this.at, {this.color = '#ffffff'});
+  final String text;
+  final TopoPoint at;
+  final String color;
+
+  Map<String, dynamic> toJson() => {'t': text, 'x': _r(at.x), 'y': _r(at.y), if (color != '#ffffff') 'color': color};
+  factory TopoLabel.fromJson(Map<String, dynamic> j) =>
+      TopoLabel(j['t'] as String? ?? '', TopoPoint((j['x'] as num).toDouble(), (j['y'] as num).toDouble()), color: j['color'] as String? ?? '#ffffff');
+}
+
 /// How a line ends: on top of the boulder (an arrow) or at a hold (a
 /// circle).
 enum TopoEnd { topOut, hold }
@@ -57,7 +118,7 @@ class TopoLine {
   /// Letters the route passes, for routes listed on the photo without a
   /// drawn line ("start G, end H"). Drawn lines also pass the letters near
   /// them; see [Topo.linesThrough].
-    final List<String> via;
+  final List<String> via;
 
   /// Drawn only on the route's own page: a variant that shares its holds
   /// with lines already on the photo, so the overview doesn't stack them.
@@ -113,6 +174,7 @@ class Topo {
     this.height = 0,
     this.marks = const [],
     this.lines = const [],
+    this.overlay = const TopoOverlay(),
     this.createdBy,
   });
 
@@ -125,6 +187,9 @@ class Topo {
   final int width, height;
   final List<TopoMark> marks;
   final List<TopoLine> lines;
+
+  /// The guide's drawing, when the section came from one; empty otherwise.
+  final TopoOverlay overlay;
   final String? createdBy;
 
   double get aspect => width > 0 && height > 0 ? width / height : 4 / 3;
@@ -138,6 +203,7 @@ class Topo {
     int? height,
     List<TopoMark>? marks,
     List<TopoLine>? lines,
+    TopoOverlay? overlay,
   }) => Topo(
     id: id,
     placeId: placeId,
@@ -149,6 +215,7 @@ class Topo {
     height: height ?? this.height,
     marks: marks ?? this.marks,
     lines: lines ?? this.lines,
+    overlay: overlay ?? this.overlay,
     createdBy: createdBy,
   );
 
@@ -234,6 +301,7 @@ class Topo {
     'height': height,
     'marks': [for (final m in marks) m.toJson()],
     'lines': [for (final l in lines) l.toJson()],
+    if (!overlay.isEmpty) 'overlay': overlay.toJson(),
   };
 
   factory Topo.fromRow(Map<String, dynamic> r) => Topo(
@@ -247,6 +315,7 @@ class Topo {
     height: (r['height'] as num?)?.toInt() ?? 0,
     marks: [for (final m in (r['marks'] as List? ?? const [])) TopoMark.fromJson((m as Map).cast<String, dynamic>())],
     lines: [for (final l in (r['lines'] as List? ?? const [])) TopoLine.fromJson((l as Map).cast<String, dynamic>())],
+    overlay: TopoOverlay.fromJson((r['overlay'] as Map?)?.cast<String, dynamic>()),
     createdBy: r['created_by'] as String?,
   );
 }

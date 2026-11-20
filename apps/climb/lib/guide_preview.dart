@@ -56,6 +56,7 @@ class GuidePreview implements PlaceEditor {
           lines: [
             for (final l in (s['lines'] as List).cast<Map>()) TopoLine.fromJson({...l.cast<String, dynamic>(), 'problem': 'guide-${l['route']}'}),
           ],
+          overlay: TopoOverlay.fromJson((s['overlay'] as Map?)?.cast<String, dynamic>()),
         ),
     ];
     return GuidePreview._(PlaceTree([boulder, ...problems]), boulder, topos);
@@ -67,6 +68,8 @@ class GuidePreview implements PlaceEditor {
   String? get me => null;
   @override
   bool get isAdmin => false;
+  @override
+  bool mayEdit(String placeId) => false;
   @override
   String? createdBy(String placeId) => null;
   @override

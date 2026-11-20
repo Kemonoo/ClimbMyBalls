@@ -17,6 +17,7 @@ import 'climb_host.dart';
 import 'guide_preview.dart';
 import 'shared_places.dart';
 import 'storage/text_box.dart';
+import 'update/update.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,6 +60,7 @@ class ClimbApp extends StatelessWidget {
     home: ClimbHome(
       cloud: cloud,
       places: () => SharedPlaces.load(cloud: cloud, cacheFile: placesCache, store: ClimbingHost.instance.store),
+      checkUpdate: updatesWork ? checkForUpdate : null,
     ),
   );
 }
@@ -66,7 +68,10 @@ class ClimbApp extends StatelessWidget {
 /// Three tabs: your climbs, the map, and friends (your account for now).
 /// The map isn't built (and loads no tiles) until its tab is opened.
 class ClimbHome extends StatefulWidget {
-  const ClimbHome({super.key, this.places, this.cloud, this.tiles, this.initialTab = const int.fromEnvironment('CLIMB_TAB')});
+  const ClimbHome({super.key, this.places, this.cloud, this.tiles, this.checkUpdate, this.initialTab = const int.fromEnvironment('CLIMB_TAB')});
+
+  /// Asks for a newer release (Android); null where updates don't apply.
+  final Future<Release?> Function()? checkUpdate;
 
   /// The map's places, loaded the first time the map opens.
   final Future<SharedPlaces> Function()? places;
@@ -85,14 +90,25 @@ class _ClimbHomeState extends State<ClimbHome> {
     Future<SharedPlaces>? _places; // loaded at start: ascents sync onto the Climbs tab
   var _mapOpened = false; // the map (and its tiles) waits for its tab
   CloudPlaceEditor? _editor;
+  SharedPlaces? _shared; // for the places an edit right can cover
 
   @override
   void initState() {
     super.initState();
     _loadPlaces();
+    if (widget.checkUpdate != null) Future<void>.delayed(const Duration(seconds: 3), () => _checkUpdate(quiet: true));
+  }
+
+  /// On start quietly; from the button it also says when you're up to date.
+  Future<void> _checkUpdate({bool quiet = false}) async {
+    final r = await widget.checkUpdate!();
+    if (!mounted) return;
+    if (r != null) return offerUpdate(context, r, installUpdate);
+    if (!quiet) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Climb $kClimbVersion is the newest.')));
   }
 
   Future<SharedPlaces> _loadPlaces() => _places ??= (widget.places ?? () async => SharedPlaces(bundled: const []))().then((p) {
+    _shared = p;
     p.refresh();
     return p;
   });
@@ -133,7 +149,11 @@ class _ClimbHomeState extends State<ClimbHome> {
     appBar: _tab == 0
         ? AppBar(
             title: const Text('Climb'),
-            actions: [IconButton(tooltip: 'Export for hibi', onPressed: () => _export(context), icon: const Icon(Icons.ios_share_rounded))],
+            actions: [
+              if (widget.checkUpdate != null)
+                IconButton(tooltip: 'Check for updates (Climb $kClimbVersion)', onPressed: _checkUpdate, icon: const Icon(Icons.system_update_outlined)),
+              IconButton(tooltip: 'Export for hibi', onPressed: () => _export(context), icon: const Icon(Icons.ios_share_rounded)),
+            ],
           )
         : null,
     body: IndexedStack(
@@ -141,7 +161,7 @@ class _ClimbHomeState extends State<ClimbHome> {
       children: [
         const SafeArea(child: ClimbSection()),
         if (_tab == 1 || _mapOpened) _map() else const SizedBox.shrink(),
-        SafeArea(child: AccountPanel(cloud: widget.cloud)),
+        SafeArea(child: AccountPanel(cloud: widget.cloud, places: () => _shared?.scopePlaces ?? const [])),
       ],
     ),
     bottomNavigationBar: NavigationBar(

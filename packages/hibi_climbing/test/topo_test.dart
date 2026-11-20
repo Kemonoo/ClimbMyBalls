@@ -90,4 +90,22 @@ void main() {
     );
     expect(listed.linesThrough('A'), {1, 2});
   });
+
+  test("a guide's drawing survives the database: each stretch once, numbers, bars", () {
+    const t = Topo(
+      id: 't',
+      placeId: 'b',
+      photoPath: 'p',
+      overlay: TopoOverlay(
+        edges: [TopoEdge([TopoPoint(0.1, 0.9), TopoPoint(0.2, 0.1)], arrow: true), TopoEdge([TopoPoint(0, 0.5), TopoPoint(1, 0.5)], color: '#f2c94c')],
+        numbers: [TopoLabel('28.', TopoPoint(0.5, 0.2))],
+        bars: [TopoPoint(0.1, 0.92)],
+      ),
+    );
+    final back = Topo.fromRow(t.toRow());
+    expect(back.overlay.edges.map((e) => (e.points.length, e.arrow, e.color)), [(2, true, '#ffffff'), (2, false, '#f2c94c')]);
+    expect(back.overlay.numbers.single.text, '28.');
+    expect(back.overlay.bars.single, const TopoPoint(0.1, 0.92));
+    expect(Topo.fromRow(const Topo(id: 'u', placeId: 'b', photoPath: 'p').toRow()).overlay.isEmpty, isTrue);
+  });
 }

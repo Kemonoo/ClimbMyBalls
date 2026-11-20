@@ -7,11 +7,13 @@ Color _hex(String h) {
 
 const _startGreen = Color(0xFF3DDC84);
 
-/// Draws a topo's lines and letters over its photo, the way hand-drawn
-/// guides do: dotted lines with a dark edge, a bar at the start, an arrow
-/// for a top-out or a circle for a finish at a hold, and the route's number.
-/// With [lit] set, the other lines fade. With [only] set, just that line is
-/// drawn, its start as a green dot.
+/// Draws a topo over its photo the way hand-drawn guides do, but light
+/// enough to see the rock. The overview shows the guide's drawing (each
+/// stretch once, small dots, the printed numbers) or, for sections drawn in
+/// the app, each route's dotted line; no circles. With [only] set, just that
+/// route: a thin line, a green ring on the start hold, and a ring on the
+/// finishing hold or an arrow for a top-out. With [lit] set, those routes
+/// are drawn over a faded overview.
 class TopoPainter extends CustomPainter {
   TopoPainter(this.topo, {this.lit = const {}, this.only, this.litMark, this.draft, this.numbers = const {}});
 
@@ -32,15 +34,32 @@ class TopoPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     Offset at(TopoPoint p) => Offset(p.x * size.width, p.y * size.height);
     final scale = (size.shortestSide / 400).clamp(0.6, 2.5);
+    final halo = Colors.black.withValues(alpha: 0.45);
 
-    void line(TopoLine l, {required bool faded, required bool strong, String? label, bool greenStart = false}) {
-      if (l.points.isEmpty) return;
-      final color = _hex(l.color).withValues(alpha: faded ? 0.35 : 1);
-      final edge = Colors.black.withValues(alpha: faded ? 0.2 : 0.7);
-      final r = (strong ? 3.0 : 2.2) * scale;
-      final step = (strong ? 8.0 : 7.0) * scale;
-      final pts = [for (final p in l.points) at(p)];
-      // dots along the line
+    void arrow(Offset e, Offset before, Color color) {
+      final dir = e - before;
+      final u = dir / (dir.distance == 0 ? 1 : dir.distance);
+      final n = Offset(-u.dy, u.dx);
+      final s = 4.5 * scale;
+      final path = Path()
+        ..moveTo((e + u * s).dx, (e + u * s).dy)
+        ..lineTo((e - u * s + n * s).dx, (e - u * s + n * s).dy)
+        ..lineTo((e - u * s - n * s).dx, (e - u * s - n * s).dy)
+        ..close();
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = halo
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5 * scale,
+      );
+      canvas.drawPath(path, Paint()..color = color);
+    }
+
+    // small dots along a polyline, like the printed guides
+    void dotted(List<Offset> pts, Color color) {
+      if (pts.isEmpty) return;
+      final r = 1.5 * scale, step = 5.5 * scale;
       final dots = <Offset>[pts.first];
       var carry = 0.0;
       for (var i = 1; i < pts.length; i++) {
@@ -53,110 +72,145 @@ class TopoPainter extends CustomPainter {
         }
         carry = len - (d - step);
       }
-      final edgePaint = Paint()..color = edge;
-      final dotPaint = Paint()..color = color;
+      final h = Paint()..color = halo, c = Paint()..color = color;
       for (final d in dots) {
-        canvas.drawCircle(d, r + 1.2 * scale, edgePaint);
+        canvas.drawCircle(d, r + 0.8 * scale, h);
       }
       for (final d in dots) {
-        canvas.drawCircle(d, r, dotPaint);
-      }
-      // start: a bar, or a green dot on a route's own page
-      final s = pts.first;
-      if (greenStart) {
-        canvas.drawCircle(s, 9 * scale, Paint()..color = Colors.black.withValues(alpha: 0.7));
-        canvas.drawCircle(s, 7 * scale, Paint()..color = _startGreen);
-      }
-      final bar = Paint()
-        ..color = color
-        ..strokeWidth = 3 * scale
-        ..strokeCap = StrokeCap.round;
-      final barEdge = Paint()
-        ..color = edge
-        ..strokeWidth = 5.5 * scale
-        ..strokeCap = StrokeCap.round;
-      if (!greenStart) {
-        canvas.drawLine(s.translate(-8 * scale, 6 * scale), s.translate(8 * scale, 6 * scale), barEdge);
-        canvas.drawLine(s.translate(-8 * scale, 6 * scale), s.translate(8 * scale, 6 * scale), bar);
-      }
-      if (l.sitStart) _text(canvas, 'SD', s.translate(0, 18 * scale), 10 * scale, color, faded);
-      // end
-      if (pts.length >= 2) {
-        final e = pts.last, before = pts[pts.length - 2];
-        if (l.end == TopoEnd.hold) {
-          final ring = Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.5 * scale;
-          canvas.drawCircle(
-            e,
-            6 * scale,
-            ring
-              ..color = edge
-              ..strokeWidth = 4.5 * scale,
-          );
-          canvas.drawCircle(
-            e,
-            6 * scale,
-            ring
-              ..color = color
-              ..strokeWidth = 2.5 * scale,
-          );
-        } else {
-          final dir = (e - before);
-          final u = dir / (dir.distance == 0 ? 1 : dir.distance);
-          final n = Offset(-u.dy, u.dx);
-          final tip = e + u * 6 * scale;
-          final path = Path()
-            ..moveTo(tip.dx, tip.dy)
-            ..lineTo((e - u * 6 * scale + n * 6 * scale).dx, (e - u * 6 * scale + n * 6 * scale).dy)
-            ..lineTo((e - u * 6 * scale - n * 6 * scale).dx, (e - u * 6 * scale - n * 6 * scale).dy)
-            ..close();
-          canvas.drawPath(
-            path,
-            Paint()
-              ..color = edge
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 2 * scale,
-          );
-          canvas.drawPath(path, Paint()..color = color);
-        }
-      }
-      // number label beside the middle of the line
-      if (label != null && pts.length >= 2) {
-        final mid = pts.length.isEven ? Offset.lerp(pts[pts.length ~/ 2 - 1], pts[pts.length ~/ 2], 0.5)! : pts[pts.length ~/ 2];
-        _text(canvas, label, mid.translate(14 * scale, 0), (strong ? 15 : 13) * scale, color, faded);
+        canvas.drawCircle(d, r, c);
       }
     }
 
-    final through = only != null && only! < topo.lines.length ? _lettersNear(topo, topo.lines[only!]) : null;
-    for (var i = 0; i < topo.lines.length; i++) {
-      if (only != null ? only != i : topo.lines[i].alone) continue;
-      final l = topo.lines[i];
-      final n = numbers[l.problemId];
-      line(
-        l,
-        faded: only == null && lit.isNotEmpty && !lit.contains(i),
-        strong: only == i || lit.contains(i),
-        label: n == null || n.isEmpty ? null : '$n.',
-        greenStart: only == i,
+    void bar(Offset s, Color color) {
+      final p = Paint()..strokeCap = StrokeCap.round;
+      canvas.drawLine(
+        s.translate(-6 * scale, 0),
+        s.translate(6 * scale, 0),
+        p
+          ..color = halo
+          ..strokeWidth = 3.5 * scale,
+      );
+      canvas.drawLine(
+        s.translate(-6 * scale, 0),
+        s.translate(6 * scale, 0),
+        p
+          ..color = color
+          ..strokeWidth = 2 * scale,
       );
     }
-    if (draft != null) line(draft!, faded: false, strong: true);
+
+    void ring(Offset c, Color color) {
+      final p = Paint()..style = PaintingStyle.stroke;
+      canvas.drawCircle(
+        c,
+        8 * scale,
+        p
+          ..color = halo
+          ..strokeWidth = 3 * scale,
+      );
+      canvas.drawCircle(
+        c,
+        8 * scale,
+        p
+          ..color = color
+          ..strokeWidth = 1.6 * scale,
+      );
+    }
+
+    // one route on its own: thin, see-through, rings on the start and finish
+    void single(TopoLine l) {
+      if (l.points.isEmpty) return;
+      final pts = [for (final p in l.points) at(p)];
+      final color = _hex(l.color).withValues(alpha: 0.85);
+      final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+      for (final p in pts.skip(1)) {
+        path.lineTo(p.dx, p.dy);
+      }
+      final stroke = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      canvas.drawPath(
+        path,
+        stroke
+          ..color = halo
+          ..strokeWidth = 3.4 * scale,
+      );
+      canvas.drawPath(
+        path,
+        stroke
+          ..color = color
+          ..strokeWidth = 1.8 * scale,
+      );
+      ring(pts.first, _startGreen);
+      if (l.sitStart) _text(canvas, 'SD', pts.first.translate(0, 16 * scale), 10 * scale, _startGreen, false);
+      if (pts.length >= 2) {
+        if (l.end == TopoEnd.hold) {
+          ring(pts.last, Colors.white);
+        } else {
+          arrow(pts.last, pts[pts.length - 2], color);
+        }
+      }
+    }
+
+    // a route drawn in the app, on the overview: dotted, a bar at the start,
+    // an arrow for a top-out, its number beside it
+    void overviewLine(TopoLine l, {required bool faded, String? label}) {
+      if (l.points.isEmpty) return;
+      final color = _hex(l.color).withValues(alpha: faded ? 0.35 : 0.9);
+      final pts = [for (final p in l.points) at(p)];
+      dotted(pts, color);
+      bar(pts.first.translate(0, 5 * scale), color);
+      if (pts.length >= 2 && l.end == TopoEnd.topOut) arrow(pts.last, pts[pts.length - 2], color);
+      if (label != null && pts.length >= 2) {
+        final mid = pts.length.isEven ? Offset.lerp(pts[pts.length ~/ 2 - 1], pts[pts.length ~/ 2], 0.5)! : pts[pts.length ~/ 2];
+        _text(canvas, label, mid.translate(12 * scale, 0), 11 * scale, color, faded);
+      }
+    }
+
+    final o = topo.overlay;
+    final through = only != null && only! < topo.lines.length ? _lettersNear(topo, topo.lines[only!]) : null;
+    if (only != null) {
+      if (only! < topo.lines.length) single(topo.lines[only!]);
+    } else {
+      final faded = lit.isNotEmpty;
+      for (final e in o.edges) {
+        final pts = [for (final p in e.points) at(p)];
+        final color = _hex(e.color).withValues(alpha: faded ? 0.3 : 0.9);
+        dotted(pts, color);
+        if (e.arrow && pts.length >= 2) arrow(pts.last, pts[pts.length - 2], color);
+      }
+      for (final b in o.bars) {
+        bar(at(b), Colors.white.withValues(alpha: faded ? 0.3 : 0.9));
+      }
+      for (final n in o.numbers) {
+        _text(canvas, n.text, at(n.at), 11 * scale, _hex(n.color), faded);
+      }
+      for (var i = 0; i < topo.lines.length; i++) {
+        final l = topo.lines[i];
+        if (l.alone) continue; // part of the guide's drawing
+        final n = numbers[l.problemId];
+        overviewLine(l, faded: faded && !lit.contains(i), label: n == null || n.isEmpty ? null : '$n.');
+      }
+      for (final i in lit) {
+        if (i < topo.lines.length && topo.lines[i].alone) single(topo.lines[i]);
+      }
+    }
+    if (draft != null) single(draft!);
     for (final m in topo.marks) {
       final ringed = m.label == litMark;
       if (ringed) {
-        canvas.drawCircle(at(m.at), 13 * scale, Paint()..color = Colors.black.withValues(alpha: 0.5));
         canvas.drawCircle(
           at(m.at),
-          13 * scale,
+          12 * scale,
           Paint()
             ..color = const Color(0xFFF2C94C)
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.5 * scale,
+            ..strokeWidth = 1.6 * scale,
         );
       }
       final dim = through != null ? !through.contains(m.label) : (lit.isNotEmpty && !ringed);
-      _text(canvas, m.label, at(m.at), 15 * scale, Colors.white, dim, bold: true);
+      _text(canvas, m.label, at(m.at), 13 * scale, Colors.white, dim, bold: true);
     }
   }
 
@@ -167,7 +221,7 @@ class TopoPainter extends CustomPainter {
         style: TextStyle(
           fontSize: size,
           fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
-          color: color.withValues(alpha: faded ? 0.4 : 1),
+          color: color.withValues(alpha: faded ? 0.35 : 1),
           shadows: [Shadow(blurRadius: 3, color: Colors.black.withValues(alpha: faded ? 0.3 : 0.9))],
         ),
       ),
