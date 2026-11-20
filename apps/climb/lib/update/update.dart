@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 export 'update_io.dart' if (dart.library.js_interop) 'update_web.dart';
 
 /// This build's version. tool/release.sh checks it matches pubspec.yaml.
-const kClimbVersion = '0.3.0';
+const kClimbVersion = '0.3.1';
 
 const kReleasesRepo = 'Kemonoo/ClimbMyBalls';
 
@@ -75,7 +75,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text('Climb ${widget.r.version} is out'),
+    title: Text('ClimbMyBalls ${widget.r.version} is out'),
     content: SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,

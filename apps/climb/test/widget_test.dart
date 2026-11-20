@@ -41,7 +41,7 @@ void main() {
     ClimbingHost.instance = ClimbAppHost(EventFile(FileBox(File('${dir.path}/empty.json'))));
     await tester.pumpWidget(const ClimbApp());
     await tester.pump();
-    expect(find.text('Climb'), findsOneWidget);
+    expect(find.text('ClimbMyBalls'), findsOneWidget);
     expect(find.byTooltip('Export for hibi'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

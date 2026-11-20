@@ -47,11 +47,11 @@ void main() {
     ));
     await t.pump(const Duration(seconds: 4));
     await t.pumpAndSettle();
-    expect(find.text('Climb 9.0.0 is out'), findsOneWidget);
+    expect(find.text('ClimbMyBalls 9.0.0 is out'), findsOneWidget);
     expect(find.text('Faster map.'), findsOneWidget);
     await t.tap(find.text('Later'));
     await t.pumpAndSettle();
-    expect(find.text('Climb 9.0.0 is out'), findsNothing);
+    expect(find.text('ClimbMyBalls 9.0.0 is out'), findsNothing);
   });
 
   testWidgets('the button says when you have the newest', (t) async {
@@ -61,6 +61,6 @@ void main() {
     await t.pump(const Duration(seconds: 4));
     await t.tap(find.byTooltip('Check for updates (Climb $kClimbVersion)'));
     await t.pumpAndSettle();
-    expect(find.text('Climb $kClimbVersion is the newest.'), findsOneWidget);
+    expect(find.text('ClimbMyBalls $kClimbVersion is the newest.'), findsOneWidget);
   });
 }

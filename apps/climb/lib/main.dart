@@ -51,7 +51,7 @@ class ClimbApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Climb',
+    title: 'ClimbMyBalls',
     debugShowCheckedModeBanner: false,
     theme: climbTheme,
         locale: const Locale('en', 'GB'), // dates as DD/MM/YYYY
@@ -104,7 +104,7 @@ class _ClimbHomeState extends State<ClimbHome> {
     final r = await widget.checkUpdate!();
     if (!mounted) return;
     if (r != null) return offerUpdate(context, r, installUpdate);
-    if (!quiet) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Climb $kClimbVersion is the newest.')));
+    if (!quiet) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ClimbMyBalls $kClimbVersion is the newest.')));
   }
 
   Future<SharedPlaces> _loadPlaces() => _places ??= (widget.places ?? () async => SharedPlaces(bundled: const []))().then((p) {
@@ -148,7 +148,7 @@ class _ClimbHomeState extends State<ClimbHome> {
   Widget build(BuildContext context) => Scaffold(
     appBar: _tab == 0
         ? AppBar(
-            title: const Text('Climb'),
+            title: const Text('ClimbMyBalls'),
             actions: [
               if (widget.checkUpdate != null)
                 IconButton(tooltip: 'Check for updates (Climb $kClimbVersion)', onPressed: _checkUpdate, icon: const Icon(Icons.system_update_outlined)),

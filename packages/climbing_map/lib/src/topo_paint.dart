@@ -40,11 +40,22 @@ class TopoPainter extends CustomPainter {
       final dir = e - before;
       final u = dir / (dir.distance == 0 ? 1 : dir.distance);
       final n = Offset(-u.dy, u.dx);
-      final s = 4.5 * scale;
+      // the logo's tail tip: a heart whose lobes flare back past where the
+      // line joins it, the point just past the line's end
+      const tip = 62.0, w = 46.0;
+      final k = 16 * scale / tip;
+      final o = e + u * (4.5 * scale) - u * (tip * k);
+      Offset p(double x, double y) => o + u * (x * k) + n * (y * k);
+      final a = p(-4, -8), b = p(-20, -w * .7), c = p(-8, -w);
+      final d = p(8, -w * 1.2), f = p(tip * .5, -w * .6), t = p(tip, 0);
+      final d2 = p(tip * .5, w * .6), f2 = p(8, w * 1.2), c2 = p(-8, w);
+      final b2 = p(-20, w * .7), a2 = p(-4, 8);
       final path = Path()
-        ..moveTo((e + u * s).dx, (e + u * s).dy)
-        ..lineTo((e - u * s + n * s).dx, (e - u * s + n * s).dy)
-        ..lineTo((e - u * s - n * s).dx, (e - u * s - n * s).dy)
+        ..moveTo(o.dx, o.dy)
+        ..cubicTo(a.dx, a.dy, b.dx, b.dy, c.dx, c.dy)
+        ..cubicTo(d.dx, d.dy, f.dx, f.dy, t.dx, t.dy)
+        ..cubicTo(d2.dx, d2.dy, f2.dx, f2.dy, c2.dx, c2.dy)
+        ..cubicTo(b2.dx, b2.dy, a2.dx, a2.dy, o.dx, o.dy)
         ..close();
       canvas.drawPath(
         path,
