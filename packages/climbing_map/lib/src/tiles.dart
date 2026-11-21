@@ -1,19 +1,17 @@
 part of '../climbing_map.dart';
 
-/// The map types: Mapy.com's outdoor map (trails, contours), its plain road
-/// map, and aerial photos.
+/// The map types: OpenStreetMap (osm.dart; works offline) and Mapy.com's
+/// aerial photos (online only, when the build has a Mapy key).
 enum MapStyle {
-  outdoor('outdoor', 'Outdoor'),
-  basic('basic', 'Roads'),
-  aerial('aerial', 'Aerial');
+  map('', 'Map'),
+  aerial('aerial', 'Aerial photos (online)');
 
   const MapStyle(this.mapset, this.label);
   final String mapset, label;
 }
 
-/// Where the map's tiles come from.
-///
-/// Mapy.com outdoor (decision 17/11, docs/climb/plan.md). Their terms
+/// Mapy.com's aerial photos, the one Mapy layer left (the map itself is
+/// OpenStreetMap since 21/11, #461, so it can be kept offline). Their terms
 /// (§4.6.2) forbid storing, pre-caching or exporting tiles, so there is no
 /// offline download: tiles are kept only as long as the server's own
 /// Cache-Control allows (one day), like a browser would. The logo and the
@@ -32,7 +30,7 @@ class MapTiles {
 
   bool get hasKey => mapyKey.isNotEmpty;
 
-  String get urlTemplate => urlFor(MapStyle.outdoor);
+  String get urlTemplate => urlFor(MapStyle.aerial);
 
   /// Tiles of [style]. Every Mapy.com map type costs the same credits.
   String urlFor(MapStyle style) => 'https://api.mapy.com/v1/maptiles/${style.mapset}/256/{z}/{x}/{y}?apikey={key}';

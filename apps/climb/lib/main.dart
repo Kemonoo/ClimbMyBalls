@@ -13,9 +13,15 @@ import 'package:climbing_map/climbing_map.dart';
 import 'package:climbing_ui/climbing_ui.dart';
 
 
+import 'package:connectivity_plus/connectivity_plus.dart';
+
 import 'climb_host.dart';
+import 'outbox.dart';
+import 'storage/map_store.dart';
+import 'storage/photo_box.dart';
 import 'guide_preview.dart';
 import 'shared_places.dart';
+import 'upload_button.dart';
 import 'storage/text_box.dart';
 import 'update/update.dart';
 
@@ -32,7 +38,7 @@ Future<void> main() async {
   }
     ClimbingHost.instance = ClimbAppHost(EventFile(await openTextBox('climb_events.json')));
   final cloud = await ClimbCloud.start(CloudConfig.fromEnvironment());
-  runApp(ClimbApp(cloud: cloud, placesCache: await openTextBox('shared_places.json')));
+  runApp(ClimbApp(cloud: cloud, placesCache: await openTextBox('shared_places.json'), outboxFile: await openTextBox('outbox.json')));
 }
 
 final climbTheme = ThemeData(
@@ -43,11 +49,16 @@ final climbTheme = ThemeData(
 );
 
 class ClimbApp extends StatelessWidget {
-  const ClimbApp({super.key, this.cloud, this.placesCache});
+  const ClimbApp({super.key, this.cloud, this.placesCache, this.outboxFile});
 
   /// Null when the build has no server keys: nothing is shared.
   final ClimbCloud? cloud;
     final TextBox? placesCache;
+
+  /// Changes waiting for signal (#460).
+  final TextBox? outboxFile;
+
+  static Future<bool> _onWifi() async => (await Connectivity().checkConnectivity()).any((c) => c == ConnectivityResult.wifi || c == ConnectivityResult.ethernet);
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -59,7 +70,21 @@ class ClimbApp extends StatelessWidget {
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
     home: ClimbHome(
       cloud: cloud,
-      places: () => SharedPlaces.load(cloud: cloud, cacheFile: placesCache, store: ClimbingHost.instance.store),
+      places: () async {
+        final p = await SharedPlaces.load(
+          cloud: cloud,
+          cacheFile: placesCache,
+          store: ClimbingHost.instance.store,
+          photos: await openPhotoBox(),
+          outbox: Outbox.load(outboxFile),
+          onWifi: _onWifi,
+        );
+        // back online (or onto Wi-Fi): send what waited, fetch what's new
+        Connectivity().onConnectivityChanged.listen((c) {
+          if (c.any((x) => x != ConnectivityResult.none)) p.refresh();
+        });
+        return p;
+      },
       checkUpdate: updatesWork ? checkForUpdate : null,
     ),
   );
@@ -91,6 +116,7 @@ class _ClimbHomeState extends State<ClimbHome> {
   var _mapOpened = false; // the map (and its tiles) waits for its tab
   CloudPlaceEditor? _editor;
   SharedPlaces? _shared; // for the places an edit right can cover
+  Future<OsmMap>? _osm; // the map's style, once
 
   @override
   void initState() {
@@ -132,10 +158,11 @@ class _ClimbHomeState extends State<ClimbHome> {
         AsyncSnapshot(:final data?) => ListenableBuilder(
           listenable: data,
           builder: (context, _) => ClimbMapScreen(
+            osm: _osm ??= openMapStore().then(OsmMap.load),
             places: data.tree,
             tiles: widget.tiles ?? MapTiles.fromEnvironment(),
             editor: data.cloud == null ? null : (_editor ??= CloudPlaceEditor(data)),
-            notice: data.problem,
+            notice: data.problem ?? data.waitingNote,
           ),
         ),
         AsyncSnapshot(:final error?) => Center(child: Text('Could not load places: $error')),
@@ -153,6 +180,7 @@ class _ClimbHomeState extends State<ClimbHome> {
               if (widget.checkUpdate != null)
                 IconButton(tooltip: 'Check for updates (Climb $kClimbVersion)', onPressed: _checkUpdate, icon: const Icon(Icons.system_update_outlined)),
               IconButton(tooltip: 'Export for hibi', onPressed: () => _export(context), icon: const Icon(Icons.ios_share_rounded)),
+              if (_shared case final s? when s.cloud != null) UploadButton(places: s),
             ],
           )
         : null,

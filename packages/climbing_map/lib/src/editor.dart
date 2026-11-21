@@ -67,6 +67,21 @@ abstract class PlaceEditor {
   Future<List<RouteComment>> commentsOf(String problemId) async => const [];
   Future<String?> addComment(String problemId, String body) async => 'Not available here.';
   Future<String?> removeComment(String id) async => 'Not available here.';
+
+  /// Whether this build can keep places on the device for use without
+  /// signal (#459).
+  bool get canKeepOffline => false;
+
+  /// Whether a place is kept on the device: saved itself or inside a saved
+  /// place.
+  bool isOffline(String placeId) => false;
+
+  /// Keeps a place and everything in it (sections, photos) on the device;
+  /// [progress] gets (photos done, photos in all). Null when it worked.
+  Future<String?> keepOffline(String placeId, {void Function(int done, int total)? progress}) async => 'Not available here.';
+
+  /// Stops keeping a place on the device and frees its photos.
+  Future<void> forgetOffline(String placeId) async {}
 }
 
 /// One logged ascent, for a route's page.

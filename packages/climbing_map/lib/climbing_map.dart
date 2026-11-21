@@ -6,6 +6,7 @@
 // the map tab is first opened, so tiles load only then.
 library;
 
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -15,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:climbing/climbing.dart';
 import 'package:climbing/places/import.dart' show pointInPolygon;
 import 'package:climbing/places/near.dart';
@@ -24,6 +26,8 @@ import 'package:climbing/places/shape.dart';
 import 'package:climbing/places/topo.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:vector_map_tiles/vector_map_tiles.dart';
+import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vt;
 
 part 'src/tiles.dart';
 part 'src/locator.dart';
@@ -33,6 +37,8 @@ part 'src/topo_paint.dart';
 part 'src/topo_screens.dart';
 part 'src/boulder_screen.dart';
 part 'src/route_filter.dart';
+part 'src/offline.dart';
+part 'src/osm.dart';
 
 ll.LatLng _ll(LatLng p) => ll.LatLng(p.lat, p.lng);
 LatLng _ours(ll.LatLng p) => LatLng(p.latitude, p.longitude);
@@ -67,7 +73,12 @@ class ClimbMapScreen extends StatefulWidget {
     this.cacheDirectory,
     this.editor,
     this.notice,
+    this.osm,
   });
+
+  /// The OpenStreetMap style and tiles, loading (osm.dart); null: no
+  /// background map (tests).
+  final Future<OsmMap>? osm;
 
   /// A line to show at the top, e.g. why shared places couldn't load.
   final String? notice;
@@ -168,7 +179,9 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
   var _shapeTool = true;
   var _shapeScale = 1.0, _shapeTurn = 0.0;
 
-  var _style = MapStyle.outdoor;
+  var _style = MapStyle.map;
+  OsmMap? _osm;
+  String? _osmProblem;
 
   /// Where you last tapped empty map: offers "Add a place here".
   LatLng? _tapped;
@@ -182,6 +195,10 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
   void initState() {
     super.initState();
     _locate(move: true);
+    widget.osm?.then(
+      (m) => mounted ? setState(() => _osm = m) : null,
+      onError: (Object e) => mounted ? setState(() => _osmProblem = 'The map could not load: no signal, and no map saved on this phone yet.') : null,
+    );
   }
 
   @override
@@ -487,7 +504,15 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
             onTap: (_, at) => _tapMap(_ours(at)),
           ),
           children: [
-            if (widget.tiles.hasKey)
+            if (_style == MapStyle.map && _osm != null)
+              VectorTileLayer(
+                theme: _osm!.theme,
+                sprites: _osm!.sprites,
+                tileProviders: TileProviders({'openmaptiles': _osm!.tiles}),
+                fileCacheMaximumSizeInBytes: 200 * 1024 * 1024,
+                maximumZoom: 21,
+              ),
+            if (_style == MapStyle.aerial && widget.tiles.hasKey)
               TileLayer(
                 urlTemplate: widget.tiles.urlFor(_style),
                 maxNativeZoom: 19,
@@ -584,7 +609,7 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
                 ],
               ],
             ),
-                        _MapCredit(hasTiles: widget.tiles.hasKey, bottom: _mode == _Mode.browse ? MediaQuery.sizeOf(context).height * _sheet + 4 : 8),
+                        _MapCredit(aerial: _style == MapStyle.aerial && widget.tiles.hasKey, bottom: _mode == _Mode.browse ? MediaQuery.sizeOf(context).height * _sheet + 4 : 8),
           ],
         ),
         ),
@@ -653,8 +678,7 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
                       ],
                     ),
                   ),
-                  if (!widget.tiles.hasKey)
-                    const _Notice('No map key in this build, so there is no background map. Build with --dart-define-from-file (see apps/climb/README.md).'),
+                  if (_osmProblem != null && _style == MapStyle.map) _Notice(_osmProblem!),
                   if (_locateProblem != null) _Notice(_locateProblem!),
                   if (widget.notice != null) _Notice(widget.notice!),
                 ],
@@ -664,11 +688,23 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
         Positioned(
           right: 12,
           bottom: _fabBase(context) + 100,
-          child: PopupMenuButton<MapStyle>(
-            tooltip: 'Map type',
+          child: PopupMenuButton<Object>(
+            tooltip: 'Map type and offline maps',
             initialValue: _style,
-            onSelected: (s) => setState(() => _style = s),
-            itemBuilder: (_) => [for (final s in MapStyle.values) PopupMenuItem(value: s, child: Text(s.label))],
+            onSelected: (s) => switch (s) {
+              MapStyle() => setState(() => _style = s),
+              'download' => _downloadArea(),
+              _ => _offlineAreas(),
+            },
+            itemBuilder: (_) => [
+              for (final s in MapStyle.values)
+                if (s == MapStyle.map || widget.tiles.hasKey) PopupMenuItem(value: s, child: Text(s.label)),
+              if (_osm != null) ...[
+                const PopupMenuDivider(),
+                const PopupMenuItem(value: 'download', child: Text('Download this area for offline')),
+                const PopupMenuItem(value: 'areas', child: Text('Offline maps')),
+              ],
+            ],
             child: IgnorePointer(
               child: FloatingActionButton.small(heroTag: 'layers', onPressed: () {}, child: const Icon(Icons.layers_outlined)),
             ),
@@ -774,6 +810,101 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
 }
 
 enum _Mode { browse, spot, outline }
+
+extension on _ClimbMapScreenState {
+  /// Downloads what the screen shows, for days without signal.
+  Future<void> _downloadArea() async {
+    final tiles = _osm!.tiles;
+    final b = _map.camera.visibleBounds;
+    final n = tiles.tilesIn(b.south, b.west, b.north, b.east).length;
+    if (n > maxAreaTiles) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('That area is too big to download ($n map tiles, at most $maxAreaTiles). Zoom in.')));
+      return;
+    }
+    final now = DateTime.now();
+    final name = TextEditingController(text: 'Area ${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Download this area'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('The map you see now, with every zoom level: $n tiles, about ${(n * 25 / 1024).ceil()} MB. It then works without signal.'),
+            const SizedBox(height: 12),
+            TextField(controller: name, decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder())),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Download')),
+        ],
+      ),
+    );
+    final label = name.text.trim().isEmpty ? 'Area' : name.text.trim();
+    name.dispose();
+    if (ok != true || !mounted) return;
+    final progress = ValueNotifier<(int, int)>((0, n));
+    final bar = ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(days: 1),
+        content: ValueListenableBuilder(
+          valueListenable: progress,
+          builder: (_, p, _) => Text('Downloading $label: ${p.$1}/${p.$2} map tiles'),
+        ),
+      ),
+    );
+    final err = await tiles.download(label, b.south, b.west, b.north, b.east, progress: (d, t) => progress.value = (d, t));
+    bar.close();
+    progress.dispose();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err ?? 'Saved: $label works without signal.')));
+  }
+
+  /// The downloaded areas: tap to go there, or remove one.
+  Future<void> _offlineAreas() async {
+    final tiles = _osm!.tiles;
+    var list = await tiles.areas();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, set) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: const Text('Offline maps'),
+                subtitle: Text(list.isEmpty ? 'None yet. Move the map to a crag, then "Download this area for offline".' : 'These areas work without signal.'),
+              ),
+              for (final a in list)
+                ListTile(
+                  leading: const Icon(Icons.map_outlined),
+                  title: Text(a.name),
+                  subtitle: Text('${a.tiles} tiles'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _map.fitCamera(CameraFit.bounds(bounds: LatLngBounds(ll.LatLng(a.south, a.west), ll.LatLng(a.north, a.east))));
+                  },
+                  trailing: IconButton(
+                    tooltip: 'Remove',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () async {
+                      await tiles.remove(a.name);
+                      final fresh = await tiles.areas();
+                      set(() => list = fresh);
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 extension on _ClimbMapScreenState {
   /// A round lens above the finger showing the map under it, twice as big,
@@ -973,11 +1104,12 @@ class _MeDot extends StatelessWidget {
   );
 }
 
-/// Mapy.com's logo and copyright (their terms say they must stay visible),
-/// and OpenStreetMap's for the imported places.
+/// The map's credits: OpenFreeMap / OpenMapTiles / OpenStreetMap, and
+/// Mapy.com's logo and copyright over its aerial photos (their terms say they
+/// must stay visible).
 class _MapCredit extends StatelessWidget {
-  const _MapCredit({required this.hasTiles, required this.bottom});
-  final bool hasTiles;
+  const _MapCredit({required this.aerial, required this.bottom});
+  final bool aerial;
   final double bottom;
 
   @override
@@ -988,16 +1120,18 @@ class _MapCredit extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (hasTiles)
+          if (aerial)
             GestureDetector(
               onTap: () => launchUrl(Uri.https('mapy.com', '/')),
               child: SvgPicture.network(MapTiles.logoUrl, height: 22, placeholderBuilder: (_) => const Text('Mapy.com')),
             ),
           const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-            color: Colors.white70,
-            child: Text([if (hasTiles) MapTiles.mapyCopyright, MapTiles.osmCopyright].join(' · '), style: const TextStyle(fontSize: 10, color: Colors.black87)),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              color: Colors.white70,
+              child: Text(aerial ? '${MapTiles.mapyCopyright} · ${MapTiles.osmCopyright}' : osmCopyright, style: const TextStyle(fontSize: 10, color: Colors.black87)),
+            ),
           ),
         ],
       ),

@@ -19,7 +19,7 @@ import 'package:climbing/places/place.dart';
 import 'package:climbing/places/topo.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-export 'package:supabase_flutter/supabase_flutter.dart' show User;
+export 'package:supabase_flutter/supabase_flutter.dart' show SupabaseClient, User;
 
 part 'src/rows.dart';
 part 'src/account.dart';
@@ -271,7 +271,7 @@ class ClimbCloud implements CloudAccount {
   /// every topo has a new id.
   Future<String> uploadPhoto(String topoId, Uint8List jpeg) async {
     final path = '${user!.id}/$topoId.jpg';
-    await db.storage.from('topos').uploadBinary(path, jpeg, fileOptions: const FileOptions(contentType: 'image/jpeg'));
+    await db.storage.from('topos').uploadBinary(path, jpeg, fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: true)); // a resend after a lost answer overwrites
     return path;
   }
 
@@ -296,7 +296,8 @@ class ClimbCloud implements CloudAccount {
   ];
 
   /// Logs your ascent of [problemId] on [day] ('flash', 'sent' or 'tried').
-  Future<void> addTick(String problemId, String outcome, DateTime day) => db.from('ticks').insert({
+  Future<void> addTick(String problemId, String outcome, DateTime day, {String? id}) => db.from('ticks').insert({
+    'id': ?id,
     'problem_id': problemId,
     'outcome': outcome,
     'day': '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}',
@@ -330,7 +331,7 @@ class ClimbCloud implements CloudAccount {
     for (final r in await db.from('comments').select().eq('problem_id', problemId).eq('deleted', false).order('created_at')) CloudComment.fromRow(r),
   ];
 
-  Future<void> addComment(String problemId, String body) => db.from('comments').insert({'problem_id': problemId, 'body': body});
+  Future<void> addComment(String problemId, String body, {String? id}) => db.from('comments').insert({'id': ?id, 'problem_id': problemId, 'body': body});
 
   /// Hides a comment (yours, or anyone's for an admin).
   Future<void> removeComment(String id) => db.from('comments').update({'deleted': true}).eq('id', id);

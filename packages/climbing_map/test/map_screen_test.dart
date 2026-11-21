@@ -22,7 +22,7 @@ void main() {
   testWidgets('near me lists the closest first; filters and the place sheet work', (t) async {
     await pump(t);
     expect(find.text('Near you'), findsOneWidget);
-    expect(find.text('No map key in this build, so there is no background map. Build with --dart-define-from-file (see apps/climb/README.md).'), findsOneWidget);
+    expect(find.textContaining('OpenFreeMap'), findsOneWidget); // the map's credit
     final rows = find.byType(ListTile);
     expect(t.widget<ListTile>(rows.first).title, isA<Text>().having((x) => x.data, 'name', 'Lúčka'));
 

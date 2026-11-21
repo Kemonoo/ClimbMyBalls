@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 export 'update_io.dart' if (dart.library.js_interop) 'update_web.dart';
 
 /// This build's version. tool/release.sh checks it matches pubspec.yaml.
-const kClimbVersion = '0.3.1';
+const kClimbVersion = '0.4.0';
 
 const kReleasesRepo = 'Kemonoo/ClimbMyBalls';
 

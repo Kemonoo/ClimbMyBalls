@@ -224,6 +224,8 @@ class _PlaceSheetState extends State<_PlaceSheet> {
                 ),
               if (_p.kind == PlaceKind.problem && widget.editor != null)
                 FilledButton.icon(onPressed: () => _openRoute(_p), icon: const Icon(Icons.open_in_full), label: const Text('Open route')),
+              if (widget.editor != null && const {PlaceKind.area, PlaceKind.sector, PlaceKind.boulder, PlaceKind.gymWall}.contains(_p.kind))
+                OfflineButton(key: ValueKey(_p.id), editor: widget.editor!, placeId: _p.id),
             ],
           ),
           if (widget.editor != null && (_p.kind == PlaceKind.boulder || _p.kind == PlaceKind.sector)) _topos(context),

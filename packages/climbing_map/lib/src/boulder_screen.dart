@@ -241,6 +241,7 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
           ],
         ),
         actions: [
+          OfflineButton(editor: _e, placeId: b.id, compact: true),
           PopupMenuButton<_BoulderAction>(
             tooltip: 'More',
             onSelected: (a) => _act(b, a),

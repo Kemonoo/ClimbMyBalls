@@ -68,14 +68,16 @@ class PlaceCache {
 
   List<Place> get places => [for (final c in _byId.values) c.place];
 
-  void merge(Iterable<CloudPlace> rows) {
+  /// [local]: changes made on the phone that wait to be sent; they don't move
+  /// [since], so the next fetch still sees everyone's changes.
+  void merge(Iterable<CloudPlace> rows, {bool local = false}) {
     for (final r in rows) {
       if (r.deleted) {
         _byId.remove(r.place.id);
       } else {
         _byId[r.place.id] = r;
       }
-      if (since == null || r.updatedAt.isAfter(since!)) since = r.updatedAt;
+      if (!local && (since == null || r.updatedAt.isAfter(since!))) since = r.updatedAt;
     }
   }
 
@@ -128,14 +130,16 @@ class TopoCache {
 
   int get length => _byId.length;
 
-  void merge(Iterable<CloudTopo> rows) {
+  Topo? byId(String id) => _byId[id]?.topo;
+
+  void merge(Iterable<CloudTopo> rows, {bool local = false}) {
     for (final r in rows) {
       if (r.deleted) {
         _byId.remove(r.topo.id);
       } else {
         _byId[r.topo.id] = r;
       }
-      if (since == null || r.updatedAt.isAfter(since!)) since = r.updatedAt;
+      if (!local && (since == null || r.updatedAt.isAfter(since!))) since = r.updatedAt;
     }
   }
 
@@ -172,6 +176,18 @@ class CloudTick {
     note: r['note'] as String? ?? '',
     createdAt: r['created_at'] == null ? null : DateTime.parse(r['created_at'] as String),
   );
+
+  Map<String, dynamic> toRow() => {
+    'id': id,
+    'user_id': userId,
+    'problem_id': problemId,
+    'day': '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}',
+    'outcome': outcome,
+    'note': note,
+    'created_at': createdAt?.toUtc().toIso8601String(),
+  };
+
+  CloudTick copyWith({DateTime? day}) => CloudTick(id: id, userId: userId, problemId: problemId, day: day ?? this.day, outcome: outcome, note: note, createdAt: createdAt);
 }
 
 /// What one person thinks of a route: the grade it felt like ('' = no vote)
@@ -195,6 +211,8 @@ class CloudOpinion {
     tags: [for (final t in (r['tags'] as List? ?? const [])) t as String],
     project: r['project'] == true,
   );
+
+  Map<String, dynamic> toRow() => {'user_id': userId, 'problem_id': problemId, 'grade': grade, 'stars': stars, 'tags': tags, 'project': project};
 }
 
 /// One comment under a route.
@@ -210,4 +228,6 @@ class CloudComment {
     body: r['body'] as String? ?? '',
     createdAt: DateTime.parse(r['created_at'] as String),
   );
+
+  Map<String, dynamic> toRow() => {'id': id, 'user_id': userId, 'problem_id': problemId, 'body': body, 'created_at': createdAt.toUtc().toIso8601String()};
 }

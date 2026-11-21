@@ -2,6 +2,7 @@
 // the shared places and topos from the database (docs/climb/plan.md step 7),
 // kept on the phone so the map works without signal and only new changes are
 // fetched.
+import 'dart:async';
 import 'dart:convert';
 
 import 'dart:ui' as ui;
@@ -16,14 +17,32 @@ import 'package:climbing/places/place_tree.dart';
 import 'package:climbing/places/topo.dart';
 import 'package:climbing_cloud/climbing_cloud.dart';
 import 'package:climbing_map/climbing_map.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
+import 'outbox.dart';
+
+import 'storage/photo_box.dart';
 import 'storage/text_box.dart';
 
 class SharedPlaces extends ChangeNotifier {
-  SharedPlaces({required this.bundled, this.cloud, this.cacheFile, this.store, PlaceCache? cache, TopoCache? topos})
-    : cache = cache ?? PlaceCache(),
-      topos = topos ?? TopoCache();
+  SharedPlaces({
+    required this.bundled,
+    this.cloud,
+    this.cacheFile,
+    this.store,
+    this.photos,
+    PlaceCache? cache,
+    TopoCache? topos,
+    Set<String>? offline,
+    this.fetch = _download,
+    Outbox? outbox,
+    Future<bool> Function()? onWifi,
+  }) : cache = cache ?? PlaceCache(),
+       topos = topos ?? TopoCache(),
+       offline = offline ?? {},
+       outbox = outbox ?? Outbox(),
+       onWifi = onWifi ?? (() async => true);
 
   final List<Place> bundled;
 
@@ -33,6 +52,28 @@ class SharedPlaces extends ChangeNotifier {
   final TextBox? cacheFile;
   final PlaceCache cache;
   final TopoCache topos;
+
+  /// Section photos kept on the device (#459): every photo you open, and all
+  /// of a place you saved offline. Null where photos can't be kept (web).
+  final PhotoBox? photos;
+
+  /// The places saved for use without signal, by id.
+  final Set<String> offline;
+
+  /// Changes waiting to reach the server, and the server's last answers (#460).
+  final Outbox outbox;
+
+  /// Whether the phone is on Wi-Fi now (for "upload only on Wi-Fi").
+  final Future<bool> Function() onWifi;
+
+  /// Downloads one photo (tests pass a fake).
+  final Future<Uint8List> Function(Uri url) fetch;
+
+  static Future<Uint8List> _download(Uri url) async {
+    final r = await http.get(url);
+    if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
+    return r.bodyBytes;
+  }
 
   /// Why the last refresh failed, shown on the map; null when fine.
   String? problem;
@@ -56,7 +97,7 @@ class SharedPlaces extends ChangeNotifier {
   ];
 
   /// Loads the bundled places and the phone's copy of the shared ones.
-  static Future<SharedPlaces> load({ClimbCloud? cloud, TextBox? cacheFile, ClimbingStore? store}) async {
+  static Future<SharedPlaces> load({ClimbCloud? cloud, TextBox? cacheFile, ClimbingStore? store, PhotoBox? photos, Outbox? outbox, Future<bool> Function()? onWifi}) async {
     final raw = jsonDecode(await rootBundle.loadString('assets/places/sk.json', cache: false)) as List;
     var guide = false;
     try {
@@ -64,12 +105,14 @@ class SharedPlaces extends ChangeNotifier {
     } catch (_) {}
     PlaceCache? cache;
     TopoCache? topos;
+    var offline = <String>{};
     try {
       final text = cacheFile?.read();
       if (text != null) {
         final j = jsonDecode(text) as Map<String, dynamic>;
         cache = PlaceCache.fromJson((j['placeCache'] as Map).cast<String, dynamic>());
         topos = TopoCache.fromJson((j['topoCache'] as Map).cast<String, dynamic>());
+        offline = {...((j['offline'] as List?) ?? const []).cast<String>()};
       }
     } catch (_) {
       cache = null; // a broken copy is fetched again in full
@@ -80,8 +123,12 @@ class SharedPlaces extends ChangeNotifier {
       cloud: cloud,
       cacheFile: cacheFile,
       store: store,
+      photos: photos,
       cache: cache,
       topos: topos,
+      offline: offline,
+      outbox: outbox,
+      onWifi: onWifi,
     )..hasGuide = guide;
   }
 
@@ -91,6 +138,7 @@ class SharedPlaces extends ChangeNotifier {
     if (c == null || c.user == null) return;
     try {
       if (c.me == null) await c.myProfile();
+      if (c.approved) await send();
       if (!c.approved) {
         problem = 'Your account is waiting to be let in (see the Friends tab).';
         notifyListeners();
@@ -107,6 +155,10 @@ class SharedPlaces extends ChangeNotifier {
       await syncTicks();
       problem = null;
       _save();
+      _tree = null;
+      for (final id in [...offline]) {
+        await keep(id); // new sections in saved places come down too
+      }
     } catch (e) {
       problem = 'Could not fetch shared places, showing the last copy. ($e)';
     }
@@ -121,7 +173,7 @@ class SharedPlaces extends ChangeNotifier {
     final c = cloud, s = store;
     if (c == null || s == null || c.user == null) return;
     final byDay = <String, List<CloudTick>>{};
-    for (final t in await c.myTicks()) {
+    for (final t in await myTicks()) {
       byDay.putIfAbsent(_dayKey(t.day), () => []).add(t);
     }
     for (final old in [...s.sessions]) {
@@ -176,7 +228,248 @@ class SharedPlaces extends ChangeNotifier {
     );
   }
 
-  void _save() => cacheFile?.write(jsonEncode({'placeCache': cache.toJson(), 'topoCache': topos.toJson()}));
+  // ---- changes: kept in the outbox, sent when there is signal (#460) ----
+
+  /// "3 changes wait for signal" for the map, or null.
+  String? get waitingNote => switch (outbox.ops.length) {
+    0 => null,
+    1 => '1 change waits for signal (or Wi-Fi) to upload.',
+    final n => '$n changes wait for signal (or Wi-Fi) to upload.',
+  };
+
+  /// Whether changes may go out now (signal is found out by trying).
+  Future<bool> get _maySend async => !outbox.wifiOnly || await onWifi();
+
+  /// Makes a change: shown at once, kept in the outbox, and sent now if it
+  /// can be. Null when it worked or waits for signal; else why it failed.
+  Future<String?> change(String kind, Map<String, dynamic> data) async {
+    _applyLocal(kind, data);
+    outbox.add(kind, data);
+    notifyListeners();
+    return send();
+  }
+
+  var _sending = false;
+
+  /// Sends the waiting changes; null unless the server refused one.
+  Future<String?> send() async {
+    final c = cloud;
+    if (_sending || c == null || c.user == null || outbox.ops.isEmpty || !await _maySend) return null;
+    _sending = true;
+    try {
+      await outbox.flush((op) => _send(c, op));
+    } finally {
+      _sending = false;
+    }
+    notifyListeners();
+    return outbox.refused;
+  }
+
+  Future<void> _send(ClimbCloud c, PendingOp op) async {
+    final d = op.data;
+    switch (op.kind) {
+      case 'tick.add':
+        await c.addTick(d['problem_id'] as String, d['outcome'] as String, DateTime.parse(d['day'] as String), id: d['id'] as String);
+      case 'tick.remove':
+        await c.removeTick(d['id'] as String);
+      case 'tick.day':
+        await c.setTickDay(d['id'] as String, DateTime.parse(d['day'] as String));
+      case 'opinion':
+        await c.setOpinion(
+          d['problem_id'] as String,
+          grade: d['grade'] as String,
+          stars: (d['stars'] as num).toInt(),
+          tags: (d['tags'] as List).cast<String>(),
+          project: d['project'] == true,
+        );
+      case 'comment.add':
+        await c.addComment(d['problem_id'] as String, d['body'] as String, id: d['id'] as String);
+      case 'comment.remove':
+        await c.removeComment(d['id'] as String);
+      case 'place.save':
+        await c.savePlace(CloudPlace.fromRow({...d, 'updated_at': DateTime.now().toUtc().toIso8601String()}).place);
+      case 'place.delete':
+        await c.deletePlace(d['id'] as String);
+      case 'topo.save':
+        final t = Topo.fromRow(d);
+        if (d['upload'] == true) {
+          final bytes = await photos?.read(t.photoPath);
+          if (bytes == null) throw StateError('The photo of ${t.name} is no longer on this phone.');
+          await c.uploadPhoto(t.id, bytes);
+        }
+        await c.saveTopo(t);
+      case 'topo.delete':
+        await c.deleteTopo(d['id'] as String);
+    }
+  }
+
+  /// Shows a place or section change on the phone before it is sent.
+  void _applyLocal(String kind, Map<String, dynamic> d) {
+    final now = DateTime.now().toUtc();
+    final me = cloud?.user?.id;
+    switch (kind) {
+      case 'place.save':
+        cache.merge([CloudPlace.fromRow({...d, 'created_by': cache.createdBy(d['id'] as String) ?? me, 'updated_at': now.toIso8601String()})], local: true);
+      case 'place.delete':
+        final p = tree[d['id'] as String];
+        if (p != null) cache.merge([CloudPlace(place: p, createdBy: me, updatedAt: now, deleted: true)], local: true);
+      case 'topo.save':
+        topos.merge([CloudTopo(topo: Topo.fromRow(d), updatedAt: now)], local: true);
+      case 'topo.delete':
+        final t = topos.byId(d['id'] as String);
+        if (t != null) topos.merge([CloudTopo(topo: t, updatedAt: now, deleted: true)], local: true);
+      default:
+        return;
+    }
+    _tree = null;
+    _save();
+  }
+
+  // ---- reads: the server's answer, or its last one without signal ----
+
+  Future<List<T>> _ask<T>(String key, Future<List<T>> Function() fetch, Map<String, dynamic> Function(T) toRow, T Function(Map<String, dynamic>) fromRow) async {
+    try {
+      final rows = await fetch();
+      outbox.remember(key, [for (final r in rows) toRow(r)]);
+      return rows;
+    } catch (e) {
+      final last = outbox.answers[key];
+      if (last is List && isNoConnection(e)) return [for (final r in last.cast<Map>()) fromRow(r.cast<String, dynamic>())];
+      if (isNoConnection(e)) return const [];
+      rethrow;
+    }
+  }
+
+  Future<List<CloudTick>> myTicks() async {
+    final c = cloud!;
+    final rows = await _ask('mine', c.myTicks, (t) => t.toRow(), CloudTick.fromRow);
+    return outbox.overTicks(rows, userId: c.user?.id);
+  }
+
+  Future<List<CloudTick>> ticksOf(String problemId) async =>
+      outbox.overTicks(await _ask('ticks:$problemId', () => cloud!.ticksOf(problemId), (t) => t.toRow(), CloudTick.fromRow), problemId: problemId)
+        ..sort((a, b) => b.day.compareTo(a.day));
+
+  Future<List<CloudOpinion>> opinionsOf(String problemId) async =>
+      outbox.overOpinions(await _ask('opinions:$problemId', () => cloud!.opinionsOf(problemId), (o) => o.toRow(), CloudOpinion.fromRow), {problemId});
+
+  /// Several routes' opinions at once; without signal, from each route's last answer.
+  Future<List<CloudOpinion>> opinionsOn(List<String> problemIds) async {
+    List<CloudOpinion> rows;
+    try {
+      rows = await cloud!.opinionsOn(problemIds);
+      for (final id in problemIds) {
+        outbox.answers['opinions:$id'] = [for (final o in rows) if (o.problemId == id) o.toRow()];
+      }
+      outbox.save();
+    } catch (e) {
+      if (!isNoConnection(e)) rethrow;
+      rows = [
+        for (final id in problemIds)
+          for (final r in (outbox.answers['opinions:$id'] as List? ?? const []).cast<Map>()) CloudOpinion.fromRow(r.cast<String, dynamic>()),
+      ];
+    }
+    return outbox.overOpinions(rows, problemIds.toSet());
+  }
+
+  Future<List<CloudComment>> commentsOf(String problemId) async =>
+      outbox.overComments(await _ask('comments:$problemId', () => cloud!.commentsOf(problemId), (c) => c.toRow(), CloudComment.fromRow), problemId)
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+  void _save() => cacheFile?.write(
+    jsonEncode({
+      'placeCache': cache.toJson(),
+      'topoCache': topos.toJson(),
+      'offline': [...offline],
+    }),
+  );
+
+  /// A place's own sections and those of everything in it.
+  List<Topo> toposUnder(String placeId) => [
+    for (final id in [placeId, ...tree.descendantsOf(placeId).map((p) => p.id)]) ...topos.of(id),
+  ];
+
+  bool isOffline(String placeId) => tree.pathTo(placeId).any((p) => offline.contains(p.id)) || offline.contains(placeId);
+
+  /// The section's photo: from the device when kept, else from the server,
+  /// kept as it arrives.
+  ImageProvider photoOf(String path) {
+    final box = photos;
+    if (box != null && box.has(path)) return box.image(path);
+    final url = cloud!.photoUrl(path);
+    return box == null ? NetworkImage(url) : _KeptPhoto(url, path, box);
+  }
+
+  /// Saves [placeId] for use without signal: downloads the photos it is
+  /// missing. Null when it worked, else what went wrong.
+  Future<String?> keep(String placeId, {void Function(int done, int total)? progress}) async {
+    final box = photos, c = cloud;
+    if (box == null || c == null) return 'Saving places is not available here.';
+    final paths = {
+      for (final t in toposUnder(placeId))
+        if (t.photoPath.isNotEmpty) t.photoPath,
+    }.where((p) => !box.has(p)).toList();
+    var done = 0, failed = 0;
+    progress?.call(0, paths.length);
+    for (final p in paths) {
+      try {
+        await box.write(p, await fetch(Uri.parse(c.photoUrl(p))));
+      } catch (_) {
+        failed++;
+      }
+      progress?.call(++done, paths.length);
+    }
+    offline.add(placeId);
+    _save();
+    notifyListeners();
+    return failed == 0 ? null : '$failed of ${paths.length} photos did not download (no signal?). Saved the rest; try Update when you have signal.';
+  }
+
+  /// Stops keeping [placeId]; its photos go unless another saved place has them.
+  Future<void> forget(String placeId) async {
+    offline.remove(placeId);
+    _save();
+    final box = photos;
+    if (box != null) {
+      final still = {
+        for (final id in offline)
+          for (final t in toposUnder(id)) t.photoPath,
+      };
+      for (final t in toposUnder(placeId)) {
+        if (!still.contains(t.photoPath) && !isOffline(t.placeId)) await box.delete(t.photoPath);
+      }
+    }
+    notifyListeners();
+  }
+}
+
+/// A photo from the server that is written to the device once it arrives, so
+/// it opens next time without signal.
+class _KeptPhoto extends ImageProvider<_KeptPhoto> {
+  const _KeptPhoto(this.url, this.path, this.box);
+  final String url, path;
+  final PhotoBox box;
+
+  @override
+  Future<_KeptPhoto> obtainKey(ImageConfiguration configuration) => SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(_KeptPhoto key, ImageDecoderCallback decode) => MultiFrameImageStreamCompleter(codec: _load(decode), scale: 1);
+
+  Future<ui.Codec> _load(ImageDecoderCallback decode) async {
+    final r = await http.get(Uri.parse(url));
+    if (r.statusCode != 200) throw NetworkImageLoadException(statusCode: r.statusCode, uri: Uri.parse(url));
+    try {
+      await box.write(path, r.bodyBytes);
+    } catch (_) {} // keeping it is a nicety
+    return decode(await ui.ImmutableBuffer.fromUint8List(r.bodyBytes));
+  }
+
+  @override
+  bool operator ==(Object other) => other is _KeptPhoto && other.url == url;
+
+  @override
+  int get hashCode => url.hashCode;
 }
 
 /// The map's editor: saves to the shared database, then fetches the change
@@ -201,13 +494,9 @@ class CloudPlaceEditor extends PlaceEditor {
     final c = places.cloud, id = me;
     if (c == null || id == null) return Rights.none;
     final t = places.tree;
-    return Rights(
-      owners: {if (c.me?.isOwner ?? false) id},
-      approved: {if (c.approved) id},
-      grants: c.grants,
-      parentOf: (p) => t[p]?.parentId,
-    );
+    return Rights(owners: {if (c.me?.isOwner ?? false) id}, approved: {if (c.approved) id}, grants: c.grants, parentOf: (p) => t[p]?.parentId);
   }
+
   @override
   String? createdBy(String placeId) => places.cache.createdBy(placeId);
   @override
@@ -218,10 +507,10 @@ class CloudPlaceEditor extends PlaceEditor {
   String newId() => newPlaceId();
 
   @override
-  Future<String?> save(Place p) => _run(() => _cloud.savePlace(p));
+  Future<String?> save(Place p) => _change('place.save', placeToRow(p));
 
   @override
-  Future<String?> delete(Place p) => _run(() => _cloud.deletePlace(p.id));
+  Future<String?> delete(Place p) => _change('place.delete', {'id': p.id});
 
   /// Sections in the guide's order: by the number in their name
   /// ('lúčka 01' before 'jaskynka 02'), then by name.
@@ -232,7 +521,16 @@ class CloudPlaceEditor extends PlaceEditor {
   }
 
   @override
-  ImageProvider photoOf(Topo t, {bool original = false}) => NetworkImage(_cloud.photoUrl(original && t.originalPath.isNotEmpty ? t.originalPath : t.photoPath));
+  ImageProvider photoOf(Topo t, {bool original = false}) => places.photoOf(original && t.originalPath.isNotEmpty ? t.originalPath : t.photoPath);
+
+  @override
+  bool get canKeepOffline => places.photos != null && places.cloud != null;
+  @override
+  bool isOffline(String placeId) => places.isOffline(placeId);
+  @override
+  Future<String?> keepOffline(String placeId, {void Function(int done, int total)? progress}) => places.keep(placeId, progress: progress);
+  @override
+  Future<void> forgetOffline(String placeId) => places.forget(placeId);
 
   /// The phone shrinks the photo (1600 px, JPEG 80): about 250–500 KB.
   @override
@@ -248,105 +546,102 @@ class CloudPlaceEditor extends PlaceEditor {
   }
 
   @override
-  Future<String?> saveTopo(Topo t, {TopoPhoto? photo}) => _run(() async {
+  Future<String?> saveTopo(Topo t, {TopoPhoto? photo}) async {
     var topo = t;
+    var upload = false;
     if (photo != null && t.photoPath.isEmpty) {
-      if (photo.bytes.length > 1000000) throw StateError('The photo is over 1 MB even after shrinking.');
-      topo = t.copyWith(photoPath: await _cloud.uploadPhoto(t.id, photo.bytes), width: photo.width, height: photo.height);
+      if (photo.bytes.length > 1000000) return 'The photo is over 1 MB even after shrinking.';
+      final box = places.photos;
+      final path = '$me/${t.id}.jpg'; // where uploadPhoto puts it
+      if (box != null) {
+        await box.write(path, photo.bytes); // shown from the phone until it is up
+        topo = t.copyWith(photoPath: path, width: photo.width, height: photo.height);
+        upload = true;
+      } else {
+        try {
+          topo = t.copyWith(photoPath: await _cloud.uploadPhoto(t.id, photo.bytes), width: photo.width, height: photo.height);
+        } catch (e) {
+          return 'Could not upload the photo. Check your connection. ($e)';
+        }
+      }
     }
-    await _cloud.saveTopo(topo);
-  });
+    return _change('topo.save', {...topo.toRow(), 'created_by': topo.createdBy, 'upload': upload});
+  }
 
   @override
-  Future<String?> deleteTopo(Topo t) => _run(() => _cloud.deleteTopo(t.id));
+  Future<String?> deleteTopo(Topo t) => _change('topo.delete', {'id': t.id});
 
   @override
   Future<List<Ascent>> ascentsOf(String problemId) async => [
-    for (final t in await _cloud.ticksOf(problemId)) (id: t.id, userId: t.userId, who: nameOf(t.userId), day: t.day, outcome: t.outcome),
+    for (final t in await places.ticksOf(problemId)) (id: t.id, userId: t.userId, who: nameOf(t.userId), day: t.day, outcome: t.outcome),
   ];
 
   @override
   Future<List<Opinion>> opinionsOf(String problemId) async => [
-    for (final o in await _cloud.opinionsOf(problemId)) (userId: o.userId, who: nameOf(o.userId), grade: o.grade, stars: o.stars, tags: o.tags, project: o.project),
+    for (final o in await places.opinionsOf(problemId))
+      (userId: o.userId, who: nameOf(o.userId), grade: o.grade, stars: o.stars, tags: o.tags, project: o.project),
   ];
 
   @override
-  Future<String?> setOpinion(String problemId, {required String grade, required int stars, required List<String> tags, required bool project}) async {
-    try {
-      await _cloud.setOpinion(problemId, grade: grade, stars: stars, tags: tags, project: project);
-      return null;
-    } catch (e) {
-      return 'Could not save it. Check your connection. ($e)';
-    }
-  }
+  Future<String?> setOpinion(String problemId, {required String grade, required int stars, required List<String> tags, required bool project}) =>
+      places.change('opinion', {'problem_id': problemId, 'user_id': me, 'grade': grade, 'stars': stars, 'tags': tags, 'project': project});
 
   @override
   Future<List<(String, Opinion)>> opinionsOn(List<String> problemIds) async => [
-    for (final o in await _cloud.opinionsOn(problemIds)) (o.problemId, (userId: o.userId, who: nameOf(o.userId), grade: o.grade, stars: o.stars, tags: o.tags, project: o.project)),
+    for (final o in await places.opinionsOn(problemIds))
+      (o.problemId, (userId: o.userId, who: nameOf(o.userId), grade: o.grade, stars: o.stars, tags: o.tags, project: o.project)),
   ];
 
   @override
   Future<Set<String>> toppedByMe() async => {
-    for (final t in await _cloud.myTicks())
+    for (final t in await places.myTicks())
       if (t.outcome != 'tried') t.problemId,
   };
 
   @override
   Future<List<RouteComment>> commentsOf(String problemId) async => [
-    for (final c in await _cloud.commentsOf(problemId)) (id: c.id, userId: c.userId, who: nameOf(c.userId), body: c.body, at: c.createdAt.toLocal()),
+    for (final c in await places.commentsOf(problemId)) (id: c.id, userId: c.userId, who: nameOf(c.userId), body: c.body, at: c.createdAt.toLocal()),
   ];
 
   @override
-  Future<String?> addComment(String problemId, String body) async {
-    try {
-      await _cloud.addComment(problemId, body);
-      return null;
-    } catch (e) {
-      return 'Could not post it. Check your connection. ($e)';
-    }
-  }
+  Future<String?> addComment(String problemId, String body) => places.change('comment.add', {
+    'id': newUuid(),
+    'user_id': me,
+    'problem_id': problemId,
+    'body': body,
+    'created_at': DateTime.now().toUtc().toIso8601String(),
+  });
 
   @override
-  Future<String?> removeComment(String id) async {
-    try {
-      await _cloud.removeComment(id);
-      return null;
-    } catch (e) {
-      return 'Could not remove it. ($e)';
-    }
-  }
+  Future<String?> removeComment(String id) => places.change('comment.remove', {'id': id});
 
   @override
   Future<String?> logAscent(String problemId, String outcome) async {
-    try {
-      await _cloud.addTick(problemId, outcome, hibiDay());
-    } catch (e) {
-      return 'Could not log it. Check your connection. ($e)';
-    }
+    final d = hibiDay();
+    final err = await places.change('tick.add', {
+      'id': newUuid(),
+      'user_id': me,
+      'problem_id': problemId,
+      'outcome': outcome,
+      'day': '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}',
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    });
     await places.syncTicks().catchError((_) {}); // onto the Climbs tab
-    return null;
+    return err;
   }
 
   @override
   Future<String?> removeAscent(String id) async {
-    try {
-      await _cloud.removeTick(id);
-    } catch (e) {
-      return 'Could not remove it. ($e)';
-    }
+    final err = await places.change('tick.remove', {'id': id});
     await places.syncTicks().catchError((_) {});
-    return null;
+    return err;
   }
 
   @override
   Future<String?> setAscentDay(String id, DateTime day) async {
-    try {
-      await _cloud.setTickDay(id, day);
-    } catch (e) {
-      return 'Could not change the date. ($e)';
-    }
+    final err = await places.change('tick.day', {'id': id, 'day': '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}'});
     await places.syncTicks().catchError((_) {});
-    return null;
+    return err;
   }
 
   @override
@@ -423,6 +718,14 @@ class CloudPlaceEditor extends PlaceEditor {
       await _cloud.saveTopo(topo);
     }
   });
+
+  /// A place or section change through the outbox; fetches everyone's
+  /// changes afterwards when it went out.
+  Future<String?> _change(String kind, Map<String, dynamic> data) async {
+    final err = await places.change(kind, data);
+    if (err == null && places.outbox.ops.isEmpty) unawaited(places.refresh());
+    return err;
+  }
 
   Future<String?> _run(Future<void> Function() f) async {
     try {

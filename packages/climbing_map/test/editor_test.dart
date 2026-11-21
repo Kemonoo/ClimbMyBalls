@@ -27,6 +27,22 @@ class _Editor extends PlaceEditor {
   DateTime? createdAt(String placeId) => DateTime(2026, 11, 19);
   @override
   String nameOf(String? userId) => userId == 'u1' ? 'Alex' : '';
+  @override
+  bool canKeepOffline = false;
+  final kept = <String>{};
+  @override
+  bool isOffline(String placeId) => kept.contains(placeId);
+  @override
+  Future<String?> keepOffline(String placeId, {void Function(int done, int total)? progress}) async {
+    progress?.call(0, 2);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    progress?.call(1, 2);
+    kept.add(placeId);
+    return null;
+  }
+
+  @override
+  Future<void> forgetOffline(String placeId) async => kept.remove(placeId);
   final ascents = <Ascent>[];
   final opinions = <String, Opinion>{};
   final comments = <RouteComment>[];
@@ -281,6 +297,29 @@ void main() {
     expect(m.label, 'A');
     expect(m.at.x, closeTo(0.4, 0.01));
     expect(m.at.y, closeTo(0.6, 0.01));
+  });
+
+  testWidgets('download a place for offline: progress, then Saved offline; remove it again', (t) async {
+    final e = _Editor(base)..canKeepOffline = true;
+    await t.pumpWidget(MaterialApp(home: Scaffold(body: Center(child: OfflineButton(editor: e, placeId: 'devin')))));
+    await t.tap(find.text('Download for offline'));
+    await t.pump();
+    expect(find.textContaining('Downloading 0/2'), findsOneWidget);
+    await t.pump(const Duration(milliseconds: 20));
+    await t.pump();
+    expect(find.text('Saved offline'), findsOneWidget);
+    expect(e.kept, {'devin'});
+    await t.tap(find.text('Saved offline'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Remove from this phone'));
+    await t.pumpAndSettle();
+    expect(find.text('Download for offline'), findsOneWidget);
+    expect(e.kept, isEmpty);
+  });
+
+  testWidgets('no offline button where the build cannot keep places', (t) async {
+    await t.pumpWidget(MaterialApp(home: Scaffold(body: OfflineButton(editor: _Editor(base), placeId: 'devin'))));
+    expect(find.byType(FilledButton), findsNothing);
   });
 
   testWidgets('a section: holds, a route built from them, a bent line, save; then a hold shows its routes', (t) async {
