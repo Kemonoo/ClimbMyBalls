@@ -25,6 +25,8 @@ class CloudPlace {
       details: (r['details'] as Map?)?.cast<String, Object?>() ?? const {},
       draft: r['draft'] == true,
       verified: r['verified'] != false,
+      inGuide: r['in_guide'] != false,
+      proven: r['proven'] == true,
     ),
     createdBy: r['created_by'] as String?,
     updatedAt: DateTime.parse(r['updated_at'] as String),
@@ -36,6 +38,8 @@ class CloudPlace {
   Map<String, dynamic> toRow() => {
     ...placeToRow(place),
     'verified': place.verified,
+    'in_guide': place.inGuide,
+    'proven': place.proven,
     'created_by': createdBy,
     'updated_at': updatedAt.toUtc().toIso8601String(),
     if (createdAt != null) 'created_at': createdAt!.toUtc().toIso8601String(),
@@ -112,8 +116,138 @@ class CloudTopo {
   factory CloudTopo.fromRow(Map<String, dynamic> r) =>
       CloudTopo(topo: Topo.fromRow(r), updatedAt: DateTime.parse(r['updated_at'] as String), deleted: r['deleted'] as bool? ?? false);
 
-  Map<String, dynamic> toRow() => {...topo.toRow(), 'created_by': topo.createdBy, 'updated_at': updatedAt.toUtc().toIso8601String(), 'deleted': deleted};
+  Map<String, dynamic> toRow() => {
+    ...topo.toRow(),
+    'in_guide': topo.inGuide,
+    'created_by': topo.createdBy,
+    'updated_at': updatedAt.toUtc().toIso8601String(),
+    'deleted': deleted,
+  };
 }
+
+/// One route's line on a section photo, as its own row (#516): anyone can
+/// draw their route on anyone's photo, and the line keeps its author.
+class CloudLine {
+  const CloudLine({required this.topoId, required this.line, this.ord = 0, required this.updatedAt, this.deleted = false});
+  final String topoId;
+  final TopoLine line;
+
+  /// Its place among the photo's lines, drawn in this order.
+  final int ord;
+  final DateTime updatedAt;
+  final bool deleted;
+
+  factory CloudLine.fromRow(Map<String, dynamic> r) => CloudLine(
+    topoId: r['topo_id'] as String,
+    ord: (r['ord'] as num?)?.toInt() ?? 0,
+    line: TopoLine.fromJson({...r, 'problem': r['problem_id']}).copyWith(
+      id: r['id'] as String,
+      createdBy: r['created_by'] as String?,
+      inGuide: r['in_guide'] != false,
+    ),
+    updatedAt: DateTime.parse(r['updated_at'] as String),
+    deleted: r['deleted'] as bool? ?? false,
+  );
+
+  /// The columns the app writes; in_guide is the database's (010_guides.sql).
+  Map<String, dynamic> toRow() {
+    final j = line.toJson()..remove('problem');
+    return {
+      'id': line.id,
+      'topo_id': topoId,
+      'problem_id': line.problemId,
+      'ord': ord,
+      'points': j['points'],
+      'start': j['start'],
+      'end': j['end'],
+      'color': j['color'],
+      'via': line.via,
+      'alone': line.alone,
+    };
+  }
+
+  /// For the phone's own copy.
+  Map<String, dynamic> toCacheRow() => {
+    ...toRow(),
+    'in_guide': line.inGuide,
+    'created_by': line.createdBy,
+    'updated_at': updatedAt.toUtc().toIso8601String(),
+    'deleted': deleted,
+  };
+}
+
+/// The phone's copy of the shared lines, like [TopoCache].
+class LineCache {
+  LineCache([Iterable<CloudLine> rows = const []]) {
+    merge(rows);
+  }
+
+  final _byId = <String, CloudLine>{};
+  DateTime? since;
+
+  /// Whether lines have come from the database at least once; until then
+  /// (or before 010_guides.sql) sections keep the lines stored in them.
+  bool get synced => since != null;
+
+  /// The lines on [topoId], in their drawing order.
+  List<TopoLine> of(String topoId) {
+    final rows = [
+      for (final c in _byId.values)
+        if (c.topoId == topoId) c,
+    ]..sort((a, b) => a.ord != b.ord ? a.ord.compareTo(b.ord) : a.updatedAt.compareTo(b.updatedAt));
+    return [for (final c in rows) c.line];
+  }
+
+  CloudLine? byId(String id) => _byId[id];
+
+  void merge(Iterable<CloudLine> rows, {bool local = false}) {
+    for (final r in rows) {
+      final id = r.line.id;
+      if (id == null) continue;
+      if (r.deleted) {
+        _byId.remove(id);
+      } else {
+        _byId[id] = r;
+      }
+      if (!local && (since == null || r.updatedAt.isAfter(since!))) since = r.updatedAt;
+    }
+  }
+
+  Map<String, dynamic> toJson() => {
+    'since': since?.toUtc().toIso8601String(),
+    'lines': [for (final c in _byId.values) c.toCacheRow()],
+  };
+
+  factory LineCache.fromJson(Map<String, dynamic> j) {
+    final c = LineCache([for (final r in (j['lines'] as List? ?? const []).cast<Map>()) CloudLine.fromRow(r.cast<String, dynamic>())]);
+    final s = j['since'] as String?;
+    if (s != null) c.since = DateTime.parse(s);
+    return c;
+  }
+}
+
+/// A guide's name and credit (#500): one official guide per place for now.
+class CloudGuide {
+  const CloudGuide({required this.id, required this.placeId, required this.name, this.credit = '', this.official = true, this.createdBy});
+  final String id, placeId, name, credit;
+  final bool official;
+  final String? createdBy;
+
+  factory CloudGuide.fromRow(Map<String, dynamic> r) => CloudGuide(
+    id: r['id'] as String,
+    placeId: r['place_id'] as String,
+    name: r['name'] as String? ?? '',
+    credit: r['credit'] as String? ?? '',
+    official: r['official'] != false,
+    createdBy: r['created_by'] as String?,
+  );
+
+  Map<String, dynamic> toRow() => {'id': id, 'place_id': placeId, 'name': name, 'credit': credit, 'official': official};
+}
+
+/// What a star or a favourite is on (#500): a place (area, boulder, route),
+/// a section photo, or a guide.
+enum StarKind { place, topo, guide }
 
 /// The phone's copy of the shared topos, like [PlaceCache].
 class TopoCache {

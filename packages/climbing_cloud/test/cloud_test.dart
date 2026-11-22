@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:climbing/places/place.dart';
+import 'package:climbing/places/topo.dart';
 import 'package:climbing_cloud/climbing_cloud.dart';
 
 class _FakeAccount implements CloudAccount {
@@ -96,6 +97,32 @@ void main() {
     expect(back.place.toJson(), p.toJson());
     expect(back.createdBy, 'u1');
     expect(placeToRow(p).containsKey('created_by'), isFalse); // the database sets it
+  });
+
+  test('a line row and the guide flags survive the trip; lines wait for their first fetch (#516)', () {
+    final l = CloudLine(
+      topoId: 't',
+      ord: 2,
+      updatedAt: DateTime.utc(2026, 11, 22),
+      line: const TopoLine(id: 'l', problemId: 'p', createdBy: 'u1', inGuide: false, points: [TopoPoint(0.1, 0.2)], end: TopoEnd.hold, via: ['A', 'B'], sitStart: true),
+    );
+    expect(l.toRow().containsKey('in_guide'), isFalse, reason: 'the database decides');
+    final back = CloudLine.fromRow(l.toCacheRow());
+    expect((back.line.id, back.line.createdBy, back.line.inGuide, back.ord, back.line.sitStart, back.line.end), ('l', 'u1', false, 2, true, TopoEnd.hold));
+    expect(back.line.via, ['A', 'B']);
+    final cache = LineCache();
+    expect(cache.synced, isFalse);
+    cache.merge([l]);
+    expect((cache.synced, cache.of('t').single.id), (true, 'l'));
+    expect(LineCache.fromJson(cache.toJson()).of('t').single.problemId, 'p');
+
+    const route = Place(id: 'r', parentId: 'b', kind: PlaceKind.problem, name: 'New', inGuide: false);
+    final row = {...placeToRow(route), 'in_guide': false, 'created_by': 'u1', 'updated_at': '2026-11-22T10:00:00Z'};
+    expect(placeToRow(route).containsKey('in_guide'), isFalse);
+    expect(CloudPlace.fromRow(row).place.inGuide, isFalse);
+    expect(CloudPlace.fromRow(CloudPlace.fromRow(row).toRow()).place.inGuide, isFalse);
+    expect(Place.fromJson(route.toJson()).inGuide, isFalse);
+    expect(Topo.fromRow({...const Topo(id: 't', placeId: 'b', photoPath: '').toRow(), 'in_guide': false}).inGuide, isFalse);
   });
 
   test('private and verified come from the row; the app never writes verified itself', () {

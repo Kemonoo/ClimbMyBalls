@@ -157,6 +157,14 @@ class Place {
   /// it. Places that never had the question (bundled, OSM) count as verified.
   final bool verified;
 
+  /// Part of the area's main guide (#500); false for a community route.
+  /// Places that never had the question (bundled, OSM) count as in it.
+  final bool inGuide;
+
+  /// A community route 3 people topped and 3 starred (#520); set by the
+  /// database (012_proven_routes.sql).
+  final bool proven;
+
   bool get sitStart => details['sit'] == true;
   String get note => details['note'] as String? ?? '';
   bool get gradeUncertain => details['uncertain'] == true;
@@ -188,6 +196,8 @@ class Place {
     this.details = const {},
     this.draft = false,
     this.verified = true,
+    this.inGuide = true,
+    this.proven = false,
   });
 
   Place copyWith({
@@ -200,6 +210,8 @@ class Place {
     Map<String, Object?>? details,
     bool? draft,
     bool? verified,
+    bool? inGuide,
+    bool? proven,
   }) => Place(
     id: id,
     parentId: parentId ?? this.parentId,
@@ -214,6 +226,8 @@ class Place {
     details: details ?? this.details,
     draft: draft ?? this.draft,
     verified: verified ?? this.verified,
+    inGuide: inGuide ?? this.inGuide,
+    proven: proven ?? this.proven,
   );
 
   Map<String, dynamic> toJson() => {
@@ -230,6 +244,8 @@ class Place {
     if (details.isNotEmpty) 'details': details,
     if (draft) 'draft': true,
     if (!verified) 'verified': false,
+    if (!inGuide) 'inGuide': false,
+    if (proven) 'proven': true,
   };
 
   factory Place.fromJson(Map<String, dynamic> j) => Place(
@@ -246,6 +262,8 @@ class Place {
     details: (j['details'] as Map?)?.cast<String, Object?>() ?? const {},
     draft: j['draft'] == true,
     verified: j['verified'] != false,
+    inGuide: j['inGuide'] != false,
+    proven: j['proven'] == true,
   );
 
   @override

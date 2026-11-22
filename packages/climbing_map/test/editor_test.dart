@@ -43,8 +43,43 @@ class _Editor extends PlaceEditor {
 
   @override
   Future<void> forgetOffline(String placeId) async => kept.remove(placeId);
+  final guided = <String>[];
+  @override
+  Future<String?> addToGuide(Place route) async {
+    guided.add(route.id);
+    return null;
+  }
+
   final published = <String>[];
   final checks = <String, bool>{};
+  final starred = <String>{};
+  final starCount = <String, int>{};
+  final favs = <String>[];
+  @override
+  int starsOf(String kind, String id) => starCount['$kind:$id'] ?? 0;
+  @override
+  bool starredByMe(String kind, String id) => starred.contains('$kind:$id');
+  @override
+  Future<String?> setStar(String kind, String id, bool on) async {
+    final k = '$kind:$id';
+    if (on && starred.add(k)) starCount[k] = starsOf(kind, id) + 1;
+    if (!on && starred.remove(k)) starCount[k] = starsOf(kind, id) - 1;
+    return null;
+  }
+
+  @override
+  bool isFavourite(String kind, String id) => favs.contains('$kind:$id');
+  @override
+  Future<String?> setFavourite(String kind, String id, bool on) async {
+    favs.remove('$kind:$id');
+    if (on) favs.insert(0, '$kind:$id');
+    return null;
+  }
+
+  @override
+  List<(String, String)> get favourites => [
+    for (final f in favs) (f.split(':').first, f.split(':').last),
+  ];
   @override
   Future<String?> publish(Place p) async {
     published.add(p.id);
@@ -596,6 +631,74 @@ void main() {
       e.isAdmin = false;
     });
 
+    testWidgets('community routes fold behind a chip and come back in their colour (#517)', (t) async {
+      await t.binding.setSurfaceSize(const Size(420, 900));
+      addTearDown(() => showCommunity.value = showNewRoutes.value = false);
+      final e = _Editor([for (final p in places) p.id == 'p35' ? p.copyWith(inGuide: false) : p])..topos.add(topo);
+      final tree = PlaceTree(e.places);
+      await t.pumpWidget(MaterialApp(home: TopoScreen(tree: tree, boulder: tree['b']!, topo: topo, editor: e)));
+      await t.pump();
+      expect(find.text('35 diagonal'), findsNothing, reason: 'the guide by default');
+      expect(t.widget<TopoCanvas>(find.byType(TopoCanvas)).topo.lines.map((l) => l.problemId), isNot(contains('p35')));
+      await t.tap(find.text('+1 new community routes'));
+      await t.pumpAndSettle();
+      expect(find.text('35 diagonal'), findsOneWidget);
+      expect(t.widget<TopoCanvas>(find.byType(TopoCanvas)).topo.lines.map((l) => l.problemId), contains('p35'));
+      expect(find.text('Community routes shown'), findsOneWidget);
+    });
+
+    testWidgets('proven community routes fold first; new ones behind a second chip; editors can add proven ones (#520)', (t) async {
+      await t.binding.setSurfaceSize(const Size(420, 900));
+      addTearDown(() => showCommunity.value = showNewRoutes.value = false);
+      final e = _Editor([
+        for (final p in places)
+          p.id == 'p35'
+              ? p.copyWith(inGuide: false, proven: true)
+              : p.id == 'p28'
+              ? p.copyWith(inGuide: false)
+              : p,
+      ])
+        ..topos.add(topo)
+        ..scoped.add('b');
+      await t.pumpWidget(MaterialApp(home: BoulderScreen(tree: () => PlaceTree(e.places), boulderId: 'b', editor: e)));
+      await t.pump();
+      expect(find.text('1 proven community route could join the guide'), findsOneWidget);
+      expect((find.text('35 diagonal').evaluate().length, find.text('28 chlieb').evaluate().length), (0, 0));
+      await t.tap(find.text('+1 community routes'));
+      await t.pumpAndSettle();
+      expect(find.text('35 diagonal'), findsOneWidget, reason: 'proven');
+      expect(find.text('28 chlieb'), findsNothing, reason: 'not proven yet');
+      await t.tap(find.text('+1 new, not proven yet'));
+      await t.pumpAndSettle();
+      expect(find.text('28 chlieb'), findsOneWidget);
+      await t.tap(find.text('1 proven community route could join the guide'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Add'));
+      await t.pumpAndSettle();
+      expect(e.guided, ['p35']);
+    });
+
+    testWidgets('a picked route shows alone; the photo button brings the others back dimmed (#517)', (t) async {
+      await t.binding.setSurfaceSize(const Size(420, 900));
+      addTearDown(() => showOtherLines.value = false);
+      final e = _Editor([...places])..topos.add(topo);
+      final tree = PlaceTree(e.places);
+      await t.pumpWidget(MaterialApp(home: TopoScreen(tree: tree, boulder: tree['b']!, topo: topo, editor: e)));
+      await t.pump();
+      expect(find.byType(OtherLinesToggle), findsNothing, reason: 'nothing picked yet');
+      await t.tap(find.byTooltip('How it goes').first);
+      await t.pumpAndSettle();
+      var canvas = t.widget<TopoCanvas>(find.byType(TopoCanvas));
+      expect(canvas.only, isNotNull);
+      expect(canvas.lit, isEmpty, reason: 'only this route');
+      await t.tap(find.byTooltip('Show the other routes'));
+      await t.pumpAndSettle();
+      canvas = t.widget<TopoCanvas>(find.byType(TopoCanvas));
+      expect(canvas.only, isNull);
+      expect(canvas.lit, hasLength(1), reason: 'the others dimmed behind it');
+      expect(find.byTooltip('Only this route'), findsOneWidget);
+    });
+
     testWidgets('tapping a letter shows only the routes through it', (t) async {
       await open(t);
       final r = t.getRect(_topoPaint);
@@ -656,6 +759,15 @@ void main() {
       expect(find.text('Unverified'), findsOneWidget);
     });
 
+    testWidgets("a route you haven't topped can't be starred yet (#518)", (t) async {
+      final e = await openRoute(t, places.firstWhere((p) => p.id == 'p8'));
+      await t.scrollUntilVisible(find.text('Stars are from people who topped it.'), 100, scrollable: find.byType(Scrollable).at(1));
+      await t.tap(find.byIcon(Icons.star_outline_rounded));
+      await t.pump();
+      expect(find.text('Top it first, then star it.'), findsOneWidget);
+      expect(e.starred, isEmpty);
+    });
+
     testWidgets('a route: its page, log an ascent, admins edit anyone\'s', (t) async {
       final e = await open(t, admin: true);
       expect(find.byTooltip('Edit section'), findsOneWidget);
@@ -674,11 +786,15 @@ void main() {
       expect(find.text('Hard'), findsOneWidget);
       expect(find.text('Feels like 8A+'), findsOneWidget);
       expect(find.text('Community grade 8A+ · 1 vote · proposed 8A'), findsOneWidget, reason: '(8A + 8A+) / 2 rounds up (#468)');
-      await t.tap(find.byTooltip('4 stars'));
+      // topped it, so it can be starred (#518)
+      await t.scrollUntilVisible(find.text('Liked it? Star it.'), 100, scrollable: find.byType(Scrollable).at(1));
+      await t.tap(find.byIcon(Icons.star_outline_rounded));
       await t.pumpAndSettle();
-      expect(e.opinions['u1']!.stars, 4);
-      await t.scrollUntilVisible(find.text('★ 4.0 · 1 rating'), 100, scrollable: find.byType(Scrollable).at(1));
-      expect(find.text('★ 4.0 · 1 rating'), findsOneWidget);
+      expect(e.starred, {'place:p7'});
+      expect(find.widgetWithText(StarButton, '1'), findsOneWidget);
+      await t.tap(find.byTooltip('Save for later'));
+      await t.pumpAndSettle();
+      expect(e.favourites, [('place', 'p7')]);
       await t.scrollUntilVisible(find.text('Crimps'), 200, scrollable: find.byType(Scrollable).at(1));
       await t.tap(find.text('Crimps'));
       await t.pumpAndSettle();
@@ -688,7 +804,7 @@ void main() {
       await t.tap(find.text('Project'));
       await t.pumpAndSettle();
       expect(e.opinions['u1']!.project, isTrue);
-      expect(e.opinions['u1']!.stars, 4); // the rest of your opinion stays
+      expect(e.opinions['u1']!.grade, '8A+'); // the rest of your opinion stays
       await t.scrollUntilVisible(find.text('traverse the whole boulder'), 200, scrollable: find.byType(Scrollable).at(1));
       // comments
       await t.tap(find.text('Comments'));

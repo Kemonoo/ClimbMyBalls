@@ -112,4 +112,15 @@ void main() {
     expect(back.overlay.starts.single, const TopoPoint(0.1, 0.92));
     expect(Topo.fromRow(const Topo(id: 'u', placeId: 'b', photoPath: 'p').toRow()).overlay.isEmpty, isTrue);
   });
+
+  test("letters are the boulder's: a route redraws itself where its letters are (#519)", () {
+    const elsewhere = [TopoLine(problemId: 'r1', points: [], via: ['A', 'B'], end: TopoEnd.hold), TopoLine(problemId: 'r2', points: [], via: ['B', 'C'])];
+    const photo = Topo(id: 'n', placeId: 'b', photoPath: '', marks: [TopoMark('A', TopoPoint(0.1, 0.9), hold: true), TopoMark('B', TopoPoint(0.5, 0.1), hold: true)]);
+    expect(photo.nextLabel(taken: {'C', 'D'}), 'E', reason: 'unique on the whole boulder');
+    expect(missingRoutes(photo, elsewhere), ['r1', 'r2']);
+    final (t, added) = rebuildFromLetters(photo, elsewhere);
+    expect(added, ['r1']);
+    expect(t.lines.single.end, TopoEnd.hold);
+    expect(missingRoutes(t, elsewhere), ['r2'], reason: 'C is not on this photo yet');
+  });
 }

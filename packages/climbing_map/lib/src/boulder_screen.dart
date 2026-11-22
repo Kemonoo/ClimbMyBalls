@@ -26,13 +26,18 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
   var _page = 0;
   String? _open;
   var _filter = const RouteFilter();
+  var _sort = RouteSort.grade;
   Map<String, RouteSummary> _summaries = const {};
 
   @override
   void initState() {
     super.initState();
+    showCommunity.addListener(_redraw);
+    showNewRoutes.addListener(_redraw);
     _loadSummaries();
   }
+
+  void _redraw() => setState(() {});
 
   /// What people think of each route here and which you topped, for the
   /// filters and the ticks on the rows.
@@ -44,9 +49,20 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
     };
     final ids = routes.keys.toList();
     try {
-      final r = await Future.wait([_e.opinionsOn(ids), _e.toppedByMe()]);
+      await _e.loadStars(StarOn.place, ids);
+      final r = await Future.wait([_e.opinionsOn(ids), _e.toppedByMe(), _e.ascentCounts(ids)]);
       if (!mounted) return;
-      setState(() => _summaries = routeSummaries(ids, r[0] as List<(String, Opinion)>, r[1] as Set<String>, _e.me, routes: routes));
+      setState(
+        () => _summaries = routeSummaries(
+          ids,
+          r[0] as List<(String, Opinion)>,
+          r[1] as Set<String>,
+          _e.me,
+          routes: routes,
+          stars: {for (final id in ids) id: _e.starsOf(StarOn.place, id)},
+          ascents: r[2] as Map<String, ({int tops, int flashes})>,
+        ),
+      );
     } catch (_) {} // the list works without them
   }
 
@@ -57,6 +73,8 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
 
   @override
   void dispose() {
+    showCommunity.removeListener(_redraw);
+    showNewRoutes.removeListener(_redraw);
     _tabs.dispose();
     _search.dispose();
     _pages.dispose();
@@ -89,12 +107,118 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
 
   Future<void> _addSection(Place b, bool camera) async {
     if (!_e.signedIn) return _say('Sign in on the Friends tab to add sections.');
+    final sections = _e.toposOf(b.id);
+    String title(Topo t) => t.name.isNotEmpty ? t.name : 'Section ${sections.indexOf(t) + 1}';
+    // most routes fit a photo that's already here (#519); a new one has a place
+    final (String, Topo?, Topo?)? where = sections.isEmpty
+        ? ('new', null, null)
+        : await showModalBottomSheet<(String, Topo?, Topo?)>(
+            context: context,
+            showDragHandle: true,
+            isScrollControlled: true,
+            builder: (context) => SafeArea(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.75),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    const ListTile(
+                      title: Text('Draw on a photo that is here'),
+                      subtitle: Text('Usually the best: add your route and any letters it needs to an existing photo.'),
+                    ),
+                    for (final s in sections)
+                      ListTile(leading: const Icon(Icons.draw_outlined), title: Text(title(s)), onTap: () => Navigator.pop(context, ('draw', s, null))),
+                    const Divider(),
+                    const ListTile(title: Text('Or a new photo')),
+                    ListTile(
+                      leading: const Icon(Icons.add_a_photo_outlined),
+                      title: const Text('Another part of the boulder'),
+                      onTap: () => Navigator.pop(context, ('new', null, null)),
+                    ),
+                    for (var i = 0; i + 1 < sections.length; i++)
+                      ListTile(
+                        leading: const Icon(Icons.compare_arrows),
+                        title: Text('Between ${title(sections[i])} and ${title(sections[i + 1])}'),
+                        onTap: () => Navigator.pop(context, ('between', sections[i], sections[i + 1])),
+                      ),
+                    for (final s in sections)
+                      ListTile(
+                        leading: const Icon(Icons.threesixty),
+                        title: Text('${title(s)} from another angle'),
+                        onTap: () => Navigator.pop(context, ('angle', s, null)),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          );
+    if (where == null || !mounted) return;
+    final (kind, a, z) = where;
+    if (kind == 'draw') {
+      await Navigator.of(context).push<Topo>(
+        MaterialPageRoute(builder: (_) => TopoEditorScreen(tree: _tree, boulder: b, topo: a!, editor: _e)),
+      );
+      if (mounted) setState(() {});
+      return;
+    }
     final photo = await _e.pickPhoto(camera: camera);
     if (photo == null || !mounted) return;
-    final t = Topo(id: newTopoId(), placeId: b.id, photoPath: '', width: photo.width, height: photo.height, createdBy: _e.me);
+    final t = Topo(
+      id: newTopoId(),
+      placeId: b.id,
+      photoPath: '',
+      width: photo.width,
+      height: photo.height,
+      createdBy: _e.me,
+      name: switch (kind) {
+        'between' => '${title(a!)} / ${title(z!)}',
+        'angle' => a!.name,
+        _ => '',
+      },
+      angleOf: kind == 'angle' ? a!.id : null,
+    );
     await Navigator.of(context).push<Topo>(
       MaterialPageRoute(
-        builder: (_) => TopoEditorScreen(tree: _tree, boulder: b, topo: t, editor: _e, newPhoto: photo),
+        builder: (_) => TopoEditorScreen(tree: _tree, boulder: b, topo: t, editor: _e, newPhoto: photo, reference: a),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// The editors' list (#520): proven community routes, added with a tap.
+  Future<void> _candidates(List<Place> routes) async {
+    final numbers = problemNumbers(_tree, widget.boulderId);
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, set) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(
+                title: Text('Proven community routes'),
+                subtitle: Text("They join the guide by themselves once they beat its average route and are drawn on a guide photo through its letters. These haven't yet; add them if they belong."),
+              ),
+              for (final p in routes)
+                ListTile(
+                  leading: Text(p.grade, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  title: Text(displayName(p, numbers[p.id])),
+                  subtitle: Text('by ${_e.nameOf(_e.createdBy(p.id)).isEmpty ? 'someone' : _e.nameOf(_e.createdBy(p.id))}'),
+                  trailing: p.inGuide
+                      ? const Icon(Icons.check)
+                      : FilledButton(
+                          onPressed: () async {
+                            final err = await _e.addToGuide(p);
+                            if (err != null) return _say(err);
+                            set(() => routes[routes.indexOf(p)] = p.copyWith(inGuide: true));
+                          },
+                          child: const Text('Add', maxLines: 1, softWrap: false),
+                        ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
     if (mounted) setState(() {});
@@ -186,14 +310,16 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
 
   List<Place> _routes(PlaceTree tree, String id, bool rope, Map<String, String> numbers) {
     final q = _search.text.trim().toLowerCase();
-    return [
-      for (final p in tree.childrenOf(id))
-        if (p.kind == PlaceKind.problem && p.isRope == rope)
-          if ((q.isEmpty || displayName(p, numbers[p.id]).toLowerCase().contains(q) || p.grade.toLowerCase() == q) && _filter.matches(p, _summaries[p.id])) p,
-    ]..sort((a, b) {
-      final c = gradeOrder(a.grade, a.gradeSystem).compareTo(gradeOrder(b.grade, b.gradeSystem));
-      return c != 0 ? c : a.name.compareTo(b.name);
-    });
+    return sortRoutes(
+      [
+        for (final p in tree.childrenOf(id))
+          if (p.kind == PlaceKind.problem && p.isRope == rope && routeShown(p))
+            if ((q.isEmpty || displayName(p, numbers[p.id]).toLowerCase().contains(q) || p.grade.toLowerCase() == q) && _filter.matches(p, _summaries[p.id])) p,
+      ],
+      _sort,
+      summaries: _summaries,
+      numbers: numbers,
+    );
   }
 
   @override
@@ -206,6 +332,13 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
     final sections = _e.toposOf(b.id);
     final numbers = problemNumbers(tree, b.id);
     final boulders = _routes(tree, b.id, false, numbers), rope = _routes(tree, b.id, true, numbers);
+    final all = [
+      for (final p in tree.childrenOf(b.id))
+        if (p.kind == PlaceKind.problem && isCommunity(p)) p,
+    ];
+    final community = all.where((p) => p.proven).length, fresh = all.length - community;
+    // proven community routes that didn't join the guide by themselves (#520)
+    final waiting = mayVerify(_e, b.id) ? all.where((p) => p.proven).toList() : const <Place>[];
     final path = tree.pathTo(b.id);
     final mine = canEdit(_e, b.id);
     final photoH = sections.isEmpty ? 0.0 : _photoHeight(context, sections.first, share: 0.34);
@@ -217,9 +350,14 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
           )
         : ListView.separated(
             padding: const EdgeInsets.only(bottom: 80),
-            itemCount: rows.length,
+            itemCount: rows.length + (community + fresh > 0 ? 1 : 0),
             separatorBuilder: (_, _) => Divider(height: 1, color: cs.outlineVariant.withValues(alpha: 0.5)),
-            itemBuilder: (context, i) => _RouteRow(
+            itemBuilder: (context, i) => i == rows.length
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    child: Align(alignment: Alignment.centerLeft, child: CommunityChip(count: community, fresh: fresh)),
+                  )
+                : _RouteRow(
               problem: rows[i],
               number: numbers[rows[i].id] ?? '',
               summary: _summaries[rows[i].id],
@@ -250,6 +388,10 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
           ],
         ),
         actions: [
+          if (_e.signedIn) ...[
+            StarButton(editor: _e, kind: StarOn.place, id: b.id),
+            FavouriteButton(editor: _e, kind: StarOn.place, id: b.id),
+          ],
           OfflineButton(editor: _e, placeId: b.id, compact: true),
           PopupMenuButton<_BoulderAction>(
             tooltip: 'More',
@@ -300,7 +442,7 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
                                       child: Center(child: Text('Photo not loaded')),
                                     ),
                                   ),
-                                  CustomPaint(painter: TopoPainter(t, numbers: numbers)),
+                                  CustomPaint(painter: TopoPainter(guideView(t, tree, all: showCommunity.value), numbers: numbers)),
                                 ],
                               ),
                             ),
@@ -375,6 +517,17 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
               ],
             ),
           ),
+          if (waiting.isNotEmpty)
+            Material(
+              color: communityColor.withValues(alpha: 0.15),
+              child: ListTile(
+                dense: true,
+                leading: const Icon(Icons.how_to_vote_outlined),
+                title: Text('${waiting.length} proven community ${waiting.length == 1 ? 'route' : 'routes'} could join the guide'),
+                subtitle: const Text('Topped and starred by 3 people. Tap to look and add.'),
+                onTap: () => _candidates(waiting),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 0, 0, 0),
             child: Row(
@@ -391,6 +544,13 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
                       suffixIcon: _search.text.isEmpty ? null : IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => setState(_search.clear)),
                     ),
                   ),
+                ),
+                PopupMenuButton<RouteSort>(
+                  tooltip: 'Sort',
+                  icon: const Icon(Icons.sort),
+                  initialValue: _sort,
+                  onSelected: (s) => setState(() => _sort = s),
+                  itemBuilder: (_) => [for (final s in RouteSort.values) PopupMenuItem(value: s, child: Text(s.label))],
                 ),
                 IconButton(
                   tooltip: 'Filters',

@@ -34,12 +34,14 @@ class SharedPlaces extends ChangeNotifier {
     this.photos,
     PlaceCache? cache,
     TopoCache? topos,
+    LineCache? lines,
     Set<String>? offline,
     this.fetch = _download,
     Outbox? outbox,
     Future<bool> Function()? onWifi,
   }) : cache = cache ?? PlaceCache(),
        topos = topos ?? TopoCache(),
+       lines = lines ?? LineCache(),
        offline = offline ?? {},
        outbox = outbox ?? Outbox(),
        onWifi = onWifi ?? (() async => true);
@@ -52,6 +54,13 @@ class SharedPlaces extends ChangeNotifier {
   final TextBox? cacheFile;
   final PlaceCache cache;
   final TopoCache topos;
+
+  /// Route lines as their own rows (#516); see [withLines].
+  final LineCache lines;
+
+  /// [t] with its lines from their own rows, once those have been fetched;
+  /// before that (or before 010_guides.sql), the lines stored in it.
+  Topo withLines(Topo t) => lines.synced ? t.copyWith(lines: lines.of(t.id)) : t;
 
   /// Section photos kept on the device (#459): every photo you open, and all
   /// of a place you saved offline. Null where photos can't be kept (web).
@@ -105,13 +114,16 @@ class SharedPlaces extends ChangeNotifier {
     } catch (_) {}
     PlaceCache? cache;
     TopoCache? topos;
+    LineCache? lines;
     var offline = <String>{};
+    Map<String, dynamic>? saved;
     try {
       final text = cacheFile?.read();
       if (text != null) {
-        final j = jsonDecode(text) as Map<String, dynamic>;
+        final j = saved = jsonDecode(text) as Map<String, dynamic>;
         cache = PlaceCache.fromJson((j['placeCache'] as Map).cast<String, dynamic>());
         topos = TopoCache.fromJson((j['topoCache'] as Map).cast<String, dynamic>());
+        if (j['lineCache'] case final Map l) lines = LineCache.fromJson(l.cast<String, dynamic>());
         offline = {...((j['offline'] as List?) ?? const []).cast<String>()};
       }
     } catch (_) {
@@ -126,10 +138,75 @@ class SharedPlaces extends ChangeNotifier {
       photos: photos,
       cache: cache,
       topos: topos,
+      lines: lines,
       offline: offline,
       outbox: outbox,
       onWifi: onWifi,
-    )..hasGuide = guide;
+    )
+      ..hasGuide = guide
+      .._restore(saved);
+  }
+
+  // ---- stars, favourites and guides (#518), kept on the phone ----
+
+  /// Your stars, as 'kind:id'.
+  final myStars = <String>{};
+
+  /// Your favourites, as 'kind:id', newest first.
+  final favourites = <String>[];
+
+  /// Everyone's stars on what you looked at, by 'kind:id'.
+  final starCounts = <String, int>{};
+
+  /// Guide names and credits (010_guides.sql).
+  var guides = <CloudGuide>[];
+
+  void _restore(Map<String, dynamic>? j) {
+    if (j == null) return;
+    try {
+      myStars.addAll(((j['stars'] as List?) ?? const []).cast<String>());
+      favourites.addAll(((j['favourites'] as List?) ?? const []).cast<String>());
+      starCounts.addAll(((j['starCounts'] as Map?) ?? const {}).cast<String, int>());
+      guides = [for (final g in ((j['guides'] as List?) ?? const []).cast<Map>()) CloudGuide.fromRow({...g.cast<String, dynamic>(), 'id': g['id']})];
+    } catch (_) {} // fetched again
+  }
+
+  /// Star counts of [ids] from the server, with your waiting changes on top;
+  /// the last known ones without signal.
+  Future<void> loadStars(String kind, List<String> ids) async {
+    final c = cloud;
+    if (c == null || c.user == null || ids.isEmpty) return;
+    try {
+      final got = await c.starCounts(StarKind.values.byName(kind), ids);
+      for (final id in ids) {
+        starCounts['$kind:$id'] = got[id] ?? 0;
+      }
+      for (final op in outbox.ops.where((o) => o.kind == 'star' && o.data['kind'] == kind && ids.contains(o.data['id']))) {
+        final k = '$kind:${op.data['id']}';
+        starCounts[k] = (starCounts[k] ?? 0) + (op.data['on'] == true ? 1 : -1);
+      }
+      _save();
+    } catch (_) {}
+  }
+
+  final _ascents = <String, ({int tops, int flashes})>{};
+
+  /// Tops and flashes per route; the last answer without signal.
+  Future<Map<String, ({int tops, int flashes})>> ascentCounts(List<String> ids) async {
+    try {
+      _ascents.addAll(await cloud!.ascentCounts(ids));
+    } catch (_) {}
+    return {for (final id in ids) id: ?_ascents[id]};
+  }
+
+  void _applyMark(String kind, Map<String, dynamic> d) {
+    final k = '${d['kind']}:${d['id']}', on = d['on'] == true;
+    if (kind == 'star') {
+      if (on ? myStars.add(k) : myStars.remove(k)) starCounts[k] = ((starCounts[k] ?? 0) + (on ? 1 : -1)).clamp(0, 1 << 30);
+    } else {
+      favourites.remove(k);
+      if (on) favourites.insert(0, k);
+    }
   }
 
   /// Fetches what changed since last time, when signed in.
@@ -147,12 +224,35 @@ class SharedPlaces extends ChangeNotifier {
       cache.merge(await c.placesSince(cache.since));
       topos.merge(await c.toposSince(topos.since));
       try {
+        lines.merge(await c.linesSince(lines.since));
+      } catch (_) {} // before 010_guides.sql: sections keep their own lines
+      try {
         names
           ..clear()
           ..addAll({for (final p in await c.allProfiles()) p.id: p.name});
       } catch (_) {} // names are a nicety
       await c.allGrants();
       await syncTicks();
+      try {
+        final stars = await c.myStars(), favs = await c.myFavourites();
+        myStars
+          ..clear()
+          ..addAll(stars);
+        favourites
+          ..retainWhere(favs.contains)
+          ..addAll(favs.where((f) => !favourites.contains(f)));
+        guides = await c.guides();
+        // what still waits to be sent stays as you left it
+        for (final op in outbox.ops.where((o) => o.kind == 'fav' || (o.kind == 'star'))) {
+          final k = '${op.data['kind']}:${op.data['id']}';
+          if (op.kind == 'star') {
+            op.data['on'] == true ? myStars.add(k) : myStars.remove(k);
+          } else {
+            favourites.remove(k);
+            if (op.data['on'] == true) favourites.insert(0, k);
+          }
+        }
+      } catch (_) {} // before 010_guides.sql
       problem = null;
       _save();
       _tree = null;
@@ -242,9 +342,14 @@ class SharedPlaces extends ChangeNotifier {
 
   /// Makes a change: shown at once, kept in the outbox, and sent now if it
   /// can be. Null when it worked or waits for signal; else why it failed.
-  Future<String?> change(String kind, Map<String, dynamic> data) async {
-    _applyLocal(kind, data);
-    outbox.add(kind, data);
+  Future<String?> change(String kind, Map<String, dynamic> data) => changes([(kind, data)]);
+
+  /// Several changes at once, sent together (a section and its lines).
+  Future<String?> changes(List<(String, Map<String, dynamic>)> all) async {
+    for (final (kind, data) in all) {
+      _applyLocal(kind, data);
+      outbox.add(kind, data);
+    }
     notifyListeners();
     return send();
   }
@@ -304,6 +409,18 @@ class SharedPlaces extends ChangeNotifier {
         await c.saveTopo(t);
       case 'topo.delete':
         await c.deleteTopo(d['id'] as String);
+      case 'star':
+        await c.setStar(StarKind.values.byName(d['kind'] as String), d['id'] as String, d['on'] == true);
+      case 'fav':
+        await c.setFavourite(StarKind.values.byName(d['kind'] as String), d['id'] as String, d['on'] == true);
+      case 'topo.marks':
+        await c.saveTopoMarks(d['id'] as String, d['marks'] as List);
+      case 'place.guide':
+        await c.addRouteToGuide(d['id'] as String, (d['photos'] as List).cast<String>());
+      case 'line.save':
+        await c.saveLine(CloudLine.fromRow(d));
+      case 'line.delete':
+        await c.deleteLine(d['id'] as String);
     }
   }
 
@@ -327,6 +444,23 @@ class SharedPlaces extends ChangeNotifier {
       case 'topo.delete':
         final t = topos.byId(d['id'] as String);
         if (t != null) topos.merge([CloudTopo(topo: t, updatedAt: now, deleted: true)], local: true);
+      case 'star' || 'fav':
+        _applyMark(kind, d);
+      case 'place.guide':
+        final p = tree[d['id'] as String];
+        if (p == null) return;
+        cache.merge([CloudPlace(place: p.copyWith(inGuide: true), createdBy: cache.createdBy(p.id), createdAt: cache.createdAt(p.id), updatedAt: now)], local: true);
+      case 'topo.marks':
+        final t = topos.byId(d['id'] as String);
+        if (t != null) {
+          final marks = [for (final m in (d['marks'] as List).cast<Map>()) TopoMark.fromJson(m.cast<String, dynamic>())];
+          topos.merge([CloudTopo(topo: t.copyWith(marks: marks), updatedAt: now)], local: true);
+        }
+      case 'line.save':
+        lines.merge([CloudLine.fromRow(d)], local: true);
+      case 'line.delete':
+        final l = lines.byId(d['id'] as String);
+        if (l != null) lines.merge([CloudLine(topoId: l.topoId, line: l.line, ord: l.ord, updatedAt: now, deleted: true)], local: true);
       default:
         return;
     }
@@ -389,7 +523,12 @@ class SharedPlaces extends ChangeNotifier {
     jsonEncode({
       'placeCache': cache.toJson(),
       'topoCache': topos.toJson(),
+      'lineCache': lines.toJson(),
       'offline': [...offline],
+      'stars': [...myStars],
+      'favourites': favourites,
+      'starCounts': starCounts,
+      'guides': [for (final g in guides) {...g.toRow(), 'created_by': g.createdBy}],
     }),
   );
 
@@ -527,6 +666,10 @@ class CloudPlaceEditor extends PlaceEditor {
   }
 
   @override
+  Future<String?> addToGuide(Place route) =>
+      _change('place.guide', {'id': route.id, 'photos': [for (final t in places.topos.of(route.parentId ?? '')) if (t.inGuide) t.id]});
+
+  @override
   Future<String?> publish(Place p) => _change('place.publish', {'id': p.id, 'verify': mayVerify(this, p.id)});
 
   @override
@@ -539,7 +682,13 @@ class CloudPlaceEditor extends PlaceEditor {
   /// ('lúčka 01' before 'jaskynka 02'), then by name.
   @override
   List<Topo> toposOf(String placeId) {
-    int n(Topo t) => int.tryParse(RegExp(r'\d+$').stringMatch(t.name.trim()) ?? '') ?? 1 << 20;
+    double n(Topo t) {
+      final ns = [
+        for (final part in t.name.split(' / '))
+          ?int.tryParse(RegExp(r'\d+$').stringMatch(part.trim()) ?? ''),
+      ];
+      return ns.isEmpty ? 1e9 : ns.reduce((a, b) => a + b) / ns.length;
+    }
     return [
       for (final t in places.topos.of(placeId))
         if (t.angleOf == null) _visible(t),
@@ -552,8 +701,10 @@ class CloudPlaceEditor extends PlaceEditor {
       if (t.angleOf == section.id) _visible(t),
   ];
 
-  /// Lines of routes you can't see (someone's private route, #462) hidden.
-  Topo _visible(Topo t) {
+  /// With its lines from their own rows; lines of routes you can't see
+  /// (someone's private route, #462) hidden.
+  Topo _visible(Topo topo) {
+    final t = places.withLines(topo);
     final tree = places.tree;
     return t.lines.every((l) => tree[l.problemId] != null) ? t : t.copyWith(lines: [for (final l in t.lines) if (tree[l.problemId] != null) l]);
   }
@@ -585,6 +736,8 @@ class CloudPlaceEditor extends PlaceEditor {
 
   @override
   Future<String?> saveTopo(Topo t, {TopoPhoto? photo}) async {
+    final before = places.topos.byId(t.id);
+    final oldLines = before == null ? const <TopoLine>[] : places.withLines(before).lines;
     var topo = t;
     var upload = false;
     if (photo != null && t.photoPath.isEmpty) {
@@ -603,7 +756,40 @@ class CloudPlaceEditor extends PlaceEditor {
         }
       }
     }
-    return _change('topo.save', {...topo.toRow(), 'created_by': topo.createdBy, 'upload': upload});
+    // each route keeps its line's row, author and place in the guide
+    final editor = mayVerify(this, topo.placeId);
+    final was = {for (final l in oldLines) l.problemId: l};
+    final lines = [
+      for (final l in topo.lines)
+        l.id != null ? l : l.copyWith(id: was[l.problemId]?.id ?? newUuid(), createdBy: was[l.problemId]?.createdBy ?? me, inGuide: was[l.problemId]?.inGuide ?? editor),
+    ];
+    topo = topo.copyWith(lines: lines);
+    final now = DateTime.now().toUtc();
+    final ops = <(String, Map<String, dynamic>)>[
+      // the section's own row, for its maker and editors; older app versions
+      // read the guide's lines from it
+      if (before == null || canEditTopo(this, before))
+        ('topo.save', {...topo.copyWith(lines: [for (final l in lines) if (l.inGuide) l]).toRow(), 'created_by': topo.createdBy, 'upload': upload})
+      // someone else's photo: only the letters you added (#519)
+      else if (topo.marks.length > before.marks.length)
+        ('topo.marks', {'id': topo.id, 'marks': [for (final m in before.marks) m.toJson(), for (final m in topo.marks) if (before.markNamed(m.label) == null) m.toJson()]}),
+    ];
+    if (places.lines.synced) {
+      bool mine(TopoLine l) => editor || l.createdBy == me;
+      final oldById = {for (var i = 0; i < oldLines.length; i++) oldLines[i].id: (i, oldLines[i])};
+      for (var i = 0; i < lines.length; i++) {
+        final l = lines[i], old = oldById[l.id];
+        if (!mine(l) || (old != null && old.$1 == i && jsonEncode(old.$2.toJson()) == jsonEncode(l.toJson()))) continue;
+        ops.add(('line.save', CloudLine(topoId: topo.id, line: l, ord: i, updatedAt: now).toCacheRow()));
+      }
+      for (final old in oldLines) {
+        if (old.id != null && mine(old) && !lines.any((l) => l.id == old.id)) ops.add(('line.delete', {'id': old.id}));
+      }
+    }
+    if (ops.isEmpty) return null;
+    final err = await places.changes(ops);
+    if (err == null && places.outbox.ops.isEmpty) unawaited(places.refresh());
+    return err;
   }
 
   @override
@@ -629,6 +815,32 @@ class CloudPlaceEditor extends PlaceEditor {
     for (final o in await places.opinionsOn(problemIds))
       (o.problemId, (userId: o.userId, who: nameOf(o.userId), grade: o.grade, stars: o.stars, tags: o.tags, project: o.project)),
   ];
+
+  @override
+  Future<void> loadStars(String kind, List<String> ids) => places.loadStars(kind, ids);
+  @override
+  int starsOf(String kind, String id) => places.starCounts['$kind:$id'] ?? 0;
+  @override
+  bool starredByMe(String kind, String id) => places.myStars.contains('$kind:$id');
+  @override
+  Future<String?> setStar(String kind, String id, bool on) => _change('star', {'kind': kind, 'id': id, 'on': on});
+  @override
+  bool isFavourite(String kind, String id) => places.favourites.contains('$kind:$id');
+  @override
+  Future<String?> setFavourite(String kind, String id, bool on) => _change('fav', {'kind': kind, 'id': id, 'on': on});
+  @override
+  List<(String, String)> get favourites => [
+    for (final f in places.favourites) (f.substring(0, f.indexOf(':')), f.substring(f.indexOf(':') + 1)),
+  ];
+  @override
+  Topo? topoById(String id) => places.topos.byId(id);
+  @override
+  GuideInfo? guideById(String id) => _guide(places.guides.where((g) => g.id == id).firstOrNull);
+  @override
+  GuideInfo? guideOf(String placeId) => _guide(places.guides.where((g) => g.placeId == placeId && g.official).firstOrNull);
+  GuideInfo? _guide(CloudGuide? g) => g == null ? null : (id: g.id, placeId: g.placeId, name: g.name, credit: g.credit);
+  @override
+  Future<Map<String, ({int tops, int flashes})>> ascentCounts(List<String> problemIds) => places.ascentCounts(problemIds);
 
   @override
   Future<Set<String>> toppedByMe() async => {
@@ -735,7 +947,9 @@ class CloudPlaceEditor extends PlaceEditor {
       final overlay = TopoOverlay.fromJson((s['overlay'] as Map?)?.cast<String, dynamic>());
       if (haveSections[s['name']] case final old?) {
         // already there: bring its letters and lines up to the guide's
-        await _cloud.saveTopo(old.copyWith(marks: marks, lines: lines, overlay: overlay));
+        final t = old.copyWith(marks: marks, lines: lines, overlay: overlay);
+        await _cloud.saveTopo(t);
+        await _importLines(t);
         continue;
       }
       final id = newTopoId();
@@ -756,8 +970,26 @@ class CloudPlaceEditor extends PlaceEditor {
         overlay: overlay,
       );
       await _cloud.saveTopo(topo);
+      await _importLines(topo);
     }
+    // the guide's name and credit (010_guides.sql)
+    try {
+      if (!(await _cloud.guides()).any((x) => x.placeId == boulder.id)) {
+        await _cloud.saveGuide(CloudGuide(id: newUuid(), placeId: boulder.id, name: guide, credit: source));
+      }
+    } catch (_) {} // before 010_guides.sql
   });
+
+  /// A guide section's lines as their own rows, reusing each route's row.
+  Future<void> _importLines(Topo t) async {
+    try {
+      final was = {for (final l in places.lines.of(t.id)) l.problemId: l};
+      for (var i = 0; i < t.lines.length; i++) {
+        final l = t.lines[i];
+        await _cloud.saveLine(CloudLine(topoId: t.id, line: l.copyWith(id: was[l.problemId]?.id ?? newUuid()), ord: i, updatedAt: DateTime.now().toUtc()));
+      }
+    } catch (_) {} // before 010_guides.sql: the lines are in the section
+  }
 
   /// A place or section change through the outbox; fetches everyone's
   /// changes afterwards when it went out.

@@ -144,10 +144,12 @@ class TopoPainter extends CustomPainter {
     }
 
     // one route on its own: thin, see-through, rings on the start and finish
+    Color base(TopoLine l) => l.inGuide ? _hex(l.color) : communityColor;
+
     void single(TopoLine l) {
       if (l.points.isEmpty) return;
       final all = [for (final p in l.points) at(p)];
-      final color = _hex(l.color).withValues(alpha: 0.85);
+      final color = base(l).withValues(alpha: 0.85);
       final hold = l.end == TopoEnd.hold && all.length >= 2;
       final pts = trimmed(all, [all.first, if (hold) all.last], big);
       if (pts.isEmpty) return;
@@ -184,7 +186,7 @@ class TopoPainter extends CustomPainter {
     // an arrow for a top-out, its number beside it
     void overviewLine(TopoLine l, {required bool faded, String? label}) {
       if (l.points.isEmpty) return;
-      final color = _hex(l.color).withValues(alpha: faded ? 0.35 : 0.9);
+      final color = base(l).withValues(alpha: faded ? 0.35 : 0.9);
       final all = [for (final p in l.points) at(p)];
       final pts = trimmed(all, [all.first], small);
       dotted(pts, color);
@@ -235,12 +237,12 @@ class TopoPainter extends CustomPainter {
       }
       for (var i = 0; i < topo.lines.length; i++) {
         final l = topo.lines[i];
-        if (l.alone) continue; // part of the guide's drawing
+        if (l.alone && l.inGuide) continue; // part of the guide's drawing
         final n = numbers[l.problemId];
         overviewLine(l, faded: faded && !lit.contains(i), label: n == null || n.isEmpty ? null : '$n.');
       }
       for (final i in lit) {
-        if (i < topo.lines.length && topo.lines[i].alone) single(topo.lines[i]);
+        if (i < topo.lines.length && topo.lines[i].alone && topo.lines[i].inGuide) single(topo.lines[i]);
       }
     }
     if (draft != null) single(draft!);

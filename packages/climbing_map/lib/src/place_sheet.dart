@@ -68,6 +68,19 @@ class _PlaceSheet extends StatefulWidget {
 
 class _PlaceSheetState extends State<_PlaceSheet> {
   late Place _p = widget.start;
+
+  /// The list below ordered by stars (#518) instead of as it comes.
+  var _byStars = false;
+
+  Future<void> _sortByStars(List<Place> children) async {
+    final e = widget.editor;
+    if (e == null) return;
+    setState(() => _byStars = !_byStars);
+    if (_byStars) {
+      await e.loadStars(StarOn.place, [for (final c in children) c.id]);
+      if (mounted) setState(() {});
+    }
+  }
   late PlaceTree _tree = widget.tree;
 
   void _say(String s) => ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(s)));
@@ -140,7 +153,11 @@ class _PlaceSheetState extends State<_PlaceSheet> {
     final cs = Theme.of(context).colorScheme;
     final path = _tree.pathTo(_p.id);
     final above = path.length > 1 ? path.sublist(0, path.length - 1) : const <Place>[];
-    final children = _tree.childrenOf(_p.id);
+    final e = widget.editor;
+    final children = [..._tree.childrenOf(_p.id)];
+    if (_byStars && e != null) {
+      children.sort((a, b) => e.starsOf(StarOn.place, b.id).compareTo(e.starsOf(StarOn.place, a.id)));
+    }
     final span = gradeSpan(_tree, _p.id);
     final mayEdit = canEdit(widget.editor, _p.id);
     final numbers = _p.kind == PlaceKind.boulder || _p.kind == PlaceKind.sector ? problemNumbers(_tree, _p.id) : const <String, String>{};
@@ -226,12 +243,26 @@ class _PlaceSheetState extends State<_PlaceSheet> {
                 FilledButton.icon(onPressed: () => _openRoute(_p), icon: const Icon(Icons.open_in_full), label: const Text('Open route')),
               if (widget.editor != null && const {PlaceKind.area, PlaceKind.sector, PlaceKind.boulder, PlaceKind.gymWall}.contains(_p.kind))
                 OfflineButton(key: ValueKey(_p.id), editor: widget.editor!, placeId: _p.id),
+              if (e != null && e.signedIn && _p.kind != PlaceKind.country && _p.kind != PlaceKind.region) ...[
+                StarButton(key: ValueKey('star${_p.id}'), editor: e, kind: StarOn.place, id: _p.id),
+                FavouriteButton(key: ValueKey('fav${_p.id}'), editor: e, kind: StarOn.place, id: _p.id),
+              ],
             ],
           ),
           if (widget.editor != null && (_p.kind == PlaceKind.boulder || _p.kind == PlaceKind.sector)) _topos(context),
           if (children.isNotEmpty) ...[
             const SizedBox(height: 16),
-            Text(_childrenTitle(children), style: text.titleMedium),
+            Row(
+              children: [
+                Expanded(child: Text(_childrenTitle(children), style: text.titleMedium)),
+                if (e != null && e.signedIn && children.length > 1)
+                  TextButton.icon(
+                    onPressed: () => _sortByStars(children),
+                    icon: Icon(_byStars ? Icons.star_rounded : Icons.sort, size: 18),
+                    label: Text(_byStars ? 'Most stars' : 'Sort by stars', maxLines: 1, softWrap: false),
+                  ),
+              ],
+            ),
             for (final c in children)
               ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -250,7 +281,14 @@ class _PlaceSheetState extends State<_PlaceSheet> {
                 subtitle: c.kind == PlaceKind.problem
                     ? (startLabel(c).isEmpty && !c.isRope ? null : Text([if (c.isRope) 'rope', if (startLabel(c).isNotEmpty) startLabel(c)].join(' · ')))
                     : Text([kindLabel(c.kind), if (gradeSpan(_tree, c.id) case final g when g.isNotEmpty) g].join(' · ')),
-                trailing: const Icon(Icons.chevron_right),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (e != null && e.starsOf(StarOn.place, c.id) > 0)
+                      Text('★${e.starsOf(StarOn.place, c.id)}', style: text.labelMedium?.copyWith(color: Colors.amber.shade700)),
+                    const Icon(Icons.chevron_right),
+                  ],
+                ),
                 onTap: () {
                   if (c.kind == PlaceKind.problem && widget.editor != null) {
                     _openRoute(c);
@@ -344,7 +382,7 @@ class _PlaceSheetState extends State<_PlaceSheet> {
                             fit: BoxFit.cover,
                             errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black26),
                           ),
-                          CustomPaint(painter: TopoPainter(t, numbers: problemNumbers(_tree, _p.id))),
+                          CustomPaint(painter: TopoPainter(guideView(t, _tree, all: showCommunity.value), numbers: problemNumbers(_tree, _p.id))),
                           Positioned(
                             left: 0,
                             right: 0,

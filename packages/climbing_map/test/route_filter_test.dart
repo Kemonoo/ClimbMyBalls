@@ -22,13 +22,16 @@ void main() {
     {'h'},
     'me',
     routes: {'e': easy, 'h': hard, 'r': rope},
+    stars: {'e': 2, 'h': 5},
+    ascents: {'h': (tops: 4, flashes: 1)},
   );
 
-  test('summaries: average stars, everyone\'s tags, your tick and project', () {
-    expect((s['e']!.stars, s['e']!.ratings, s['e']!.project, s['e']!.topped), (3.0, 2, true, false));
+  test("summaries: stars (#518), ascents, everyone's tags, your tick and project", () {
+    expect((s['e']!.stars, s['e']!.project, s['e']!.topped), (2, true, false));
+    expect((s['h']!.tops, s['h']!.flashes, s['e']!.tops), (4, 1, 0));
     expect(s['e']!.tags, {'crimps', 'slab'});
     expect((s['h']!.topped, s['h']!.project), (true, false));
-    expect(s['r']!.ratings, 0);
+    expect(s['r']!.stars, 0);
     expect((s['e']!.grade, s['h']!.grade), ('', '7B'), reason: 'the community grade once people vote (#468)');
   });
 
@@ -44,10 +47,18 @@ void main() {
     expect(m(RouteFilter(fontMin: from6a), hard), isTrue);
     expect(m(RouteFilter(fontMin: from6a), rope), isTrue, reason: 'a Font bound leaves rope routes alone');
     expect(m(const RouteFilter(minStars: 4), hard), isTrue);
-    expect(m(const RouteFilter(minStars: 4), easy), isFalse);
-    expect(m(const RouteFilter(minStars: 1), rope), isFalse, reason: 'unrated');
+    expect(m(const RouteFilter(minStars: 4), easy), isFalse, reason: 'starred by 2');
+    expect(m(const RouteFilter(minStars: 1), rope), isFalse, reason: 'no stars');
     expect(m(const RouteFilter(tags: {'crimps', 'slab'}), easy), isTrue);
     expect(m(const RouteFilter(tags: {'crimps'}), hard), isFalse);
     expect(const RouteFilter(show: RouteShow.topped, minStars: 3, tags: {'a', 'b'}).active, 4);
+  });
+
+  test('sorting by stars, ascents and flashes; ties by grade (#518)', () {
+    List<String> by(RouteSort x) => [for (final p in sortRoutes([easy, hard, rope], x, summaries: s)) p.id];
+    expect(by(RouteSort.stars), ['h', 'e', 'r']);
+    expect(by(RouteSort.ascents).first, 'h');
+    expect(by(RouteSort.flashes).first, 'h');
+    expect(by(RouteSort.grade).where((id) => id != 'r'), ['e', 'h']);
   });
 }

@@ -4,10 +4,20 @@ part of '../climbing_map.dart';
 /// people think of it and what you did on it.
 ///
 /// [grade] is the community grade ([averageGrade]); '' until someone votes.
-typedef RouteSummary = ({double stars, int ratings, Set<String> tags, bool topped, bool project, String grade});
+/// [stars] is how many people starred it (#518); [tops] and [flashes] count
+/// different people.
+typedef RouteSummary = ({int stars, Set<String> tags, bool topped, bool project, String grade, int tops, int flashes});
 
 /// Everyone's opinions of some routes and your ascents, as one summary each.
-Map<String, RouteSummary> routeSummaries(Iterable<String> ids, List<(String, Opinion)> opinions, Set<String> topped, String? me, {Map<String, Place> routes = const {}}) {
+Map<String, RouteSummary> routeSummaries(
+  Iterable<String> ids,
+  List<(String, Opinion)> opinions,
+  Set<String> topped,
+  String? me, {
+  Map<String, Place> routes = const {},
+  Map<String, int> stars = const {},
+  Map<String, ({int tops, int flashes})> ascents = const {},
+}) {
   final by = <String, List<Opinion>>{};
   for (final (id, o) in opinions) {
     (by[id] ??= []).add(o);
@@ -16,13 +26,10 @@ Map<String, RouteSummary> routeSummaries(Iterable<String> ids, List<(String, Opi
     for (final id in ids)
       id: () {
         final os = by[id] ?? const <Opinion>[];
-        final rated = [
-          for (final o in os)
-            if (o.stars > 0) o.stars,
-        ];
         return (
-          stars: rated.isEmpty ? 0.0 : rated.reduce((a, b) => a + b) / rated.length,
-          ratings: rated.length,
+          stars: stars[id] ?? 0,
+          tops: ascents[id]?.tops ?? 0,
+          flashes: ascents[id]?.flashes ?? 0,
           tags: {for (final o in os) ...o.tags},
           topped: topped.contains(id),
           project: os.any((o) => o.userId == me && o.project),
@@ -75,7 +82,7 @@ class RouteFilter {
       final g = gradeStep(p.grade, scale);
       if (g == null || (lo != null && g < lo) || (hi != null && g > hi)) return false;
     }
-    if (minStars > 0 && (s == null || s.ratings == 0 || s.stars < minStars)) return false;
+    if (minStars > 0 && (s == null || s.stars < minStars)) return false;
     if (tags.isNotEmpty && !(s?.tags.containsAll(tags) ?? false)) return false;
     return true;
   }
@@ -153,11 +160,11 @@ Future<RouteFilter?> showRouteFilterSheet(BuildContext context, RouteFilter star
                   }),
                 ),
                 const SizedBox(height: 8),
-                Text(f.minStars == 0 ? 'Stars: any' : 'Stars: ${f.minStars} and up', style: text.titleSmall),
+                Text(f.minStars == 0 ? 'Stars: any' : 'Starred by at least ${f.minStars}', style: text.titleSmall),
                 Slider(
                   value: f.minStars.toDouble(),
-                  max: 5,
-                  divisions: 5,
+                  max: 10,
+                  divisions: 10,
                   label: f.minStars == 0 ? 'Any' : '${f.minStars}★',
                   onChanged: (v) => set(() => f = f.copyWith(minStars: v.round())),
                 ),

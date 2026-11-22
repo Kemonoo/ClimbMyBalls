@@ -288,8 +288,84 @@ class ClimbCloud implements CloudAccount {
   /// Adds [t], or saves changes to a topo you created (admins: any).
   Future<void> saveTopo(Topo t) => db.from('topos').upsert(t.toRow());
 
+  /// Adds letters to someone else's photo (011_shared_letters.sql lets
+  /// anyone add, not change).
+  Future<void> saveTopoMarks(String id, List<Object?> marks) => db.from('topos').update({'marks': marks}).eq('id', id);
+
   /// Marks a topo as deleted.
   Future<void> deleteTopo(String id) => db.from('topos').update({'deleted': true}).eq('id', id);
+
+  /// Route lines added, changed or deleted after [since] (010_guides.sql).
+  Future<List<CloudLine>> linesSince(DateTime? since) async {
+    final q = db.from('route_lines').select();
+    final rows = since == null ? await q.order('updated_at') : await q.gt('updated_at', since.toUtc().toIso8601String()).order('updated_at');
+    return [for (final r in rows) CloudLine.fromRow(r)];
+  }
+
+  /// Adds or changes a line (yours, or any as a place editor).
+  Future<void> saveLine(CloudLine l) => db.from('route_lines').upsert(l.toRow());
+
+  Future<void> deleteLine(String id) => db.from('route_lines').update({'deleted': true}).eq('id', id);
+
+  /// Every guide's name and credit.
+  Future<List<CloudGuide>> guides() async => [
+    for (final r in await db.from('guides').select().eq('deleted', false)) CloudGuide.fromRow(r),
+  ];
+
+  Future<void> saveGuide(CloudGuide g) => db.from('guides').upsert(g.toRow());
+
+  /// Puts a route, photo or line into the main guide or takes it out
+  /// (place editors; the database checks).
+  Future<void> setInGuide(String table, String id, bool inGuide) => db.from(table).update({'in_guide': inGuide}).eq('id', id);
+
+  /// Puts a route into the main guide with its lines on the guide's photos
+  /// (place editors).
+  Future<void> addRouteToGuide(String id, List<String> guidePhotos) async {
+    await db.from('places').update({'in_guide': true}).eq('id', id);
+    if (guidePhotos.isNotEmpty) await db.from('route_lines').update({'in_guide': true}).eq('problem_id', id).inFilter('topo_id', guidePhotos);
+  }
+
+  /// Your stars, as kind:id.
+  Future<Set<String>> myStars() async => {
+    for (final r in await db.from('stars').select('kind,item_id').eq('user_id', user!.id)) '${r['kind']}:${r['item_id']}',
+  };
+
+  /// How many stars each of [ids] has.
+  Future<Map<String, int>> starCounts(StarKind kind, List<String> ids) async {
+    if (ids.isEmpty) return const {};
+    final out = <String, int>{};
+    for (final r in await db.from('stars').select('item_id').eq('kind', kind.name).inFilter('item_id', ids)) {
+      final id = r['item_id'] as String;
+      out[id] = (out[id] ?? 0) + 1;
+    }
+    return out;
+  }
+
+  /// Stars or unstars something. A route needs your top first.
+  Future<void> setStar(StarKind kind, String id, bool on) => on
+      ? db.from('stars').upsert({'user_id': user!.id, 'kind': kind.name, 'item_id': id})
+      : db.from('stars').delete().eq('user_id', user!.id).eq('kind', kind.name).eq('item_id', id);
+
+  /// How many different people topped and flashed each route.
+  Future<Map<String, ({int tops, int flashes})>> ascentCounts(List<String> ids) async {
+    if (ids.isEmpty) return const {};
+    final tops = <String, Set<String>>{}, flashes = <String, Set<String>>{};
+    for (final r in await db.from('ticks').select('problem_id,user_id,outcome').inFilter('problem_id', ids).eq('deleted', false)) {
+      final p = r['problem_id'] as String, u = r['user_id'] as String, o = r['outcome'];
+      if (o == 'flash' || o == 'sent') (tops[p] ??= {}).add(u);
+      if (o == 'flash') (flashes[p] ??= {}).add(u);
+    }
+    return {for (final id in ids) id: (tops: tops[id]?.length ?? 0, flashes: flashes[id]?.length ?? 0)};
+  }
+
+  /// Your favourites, as kind:id.
+  Future<Set<String>> myFavourites() async => {
+    for (final r in await db.from('favourites').select('kind,item_id').eq('user_id', user!.id)) '${r['kind']}:${r['item_id']}',
+  };
+
+  Future<void> setFavourite(StarKind kind, String id, bool on) => on
+      ? db.from('favourites').upsert({'user_id': user!.id, 'kind': kind.name, 'item_id': id})
+      : db.from('favourites').delete().eq('user_id', user!.id).eq('kind', kind.name).eq('item_id', id);
 
   /// Everyone's ascents of [problemId], newest first.
   Future<List<CloudTick>> ticksOf(String problemId) async => [

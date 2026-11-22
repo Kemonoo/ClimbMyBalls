@@ -93,7 +93,36 @@ abstract class PlaceEditor {
 
   /// Stops keeping a place on the device and frees its photos.
   Future<void> forgetOffline(String placeId) async {}
+
+  // ---- stars and favourites (#518); kind is a [StarOn] ----
+
+  /// Fetches the star counts of [ids] (the last known ones without signal).
+  Future<void> loadStars(String kind, List<String> ids) async {}
+  int starsOf(String kind, String id) => 0;
+  bool starredByMe(String kind, String id) => false;
+  Future<String?> setStar(String kind, String id, bool on) async => 'Not available here.';
+  bool isFavourite(String kind, String id) => false;
+  Future<String?> setFavourite(String kind, String id, bool on) async => 'Not available here.';
+
+  /// Your favourites, newest first, as (kind, id).
+  List<(String, String)> get favourites => const [];
+
+  /// A section photo by id, wherever it is.
+  Topo? topoById(String id) => null;
+
+  /// A guide by id, and the official guide of a place (#500).
+  GuideInfo? guideById(String id) => null;
+  GuideInfo? guideOf(String placeId) => null;
+
+  /// Puts a proven community route into the main guide (#520; editors).
+  Future<String?> addToGuide(Place route) async => 'Not available here.';
+
+  /// How many people topped and flashed each route, for sorting.
+  Future<Map<String, ({int tops, int flashes})>> ascentCounts(List<String> problemIds) async => const {};
 }
+
+/// A guide's name and credit (the Devín guide, 2020).
+typedef GuideInfo = ({String id, String placeId, String name, String credit});
 
 /// One logged ascent, for a route's page.
 typedef Ascent = ({String id, String userId, String who, DateTime day, String outcome});

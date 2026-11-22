@@ -39,6 +39,7 @@ part 'src/boulder_screen.dart';
 part 'src/route_filter.dart';
 part 'src/offline.dart';
 part 'src/osm.dart';
+part 'src/stars.dart';
 
 ll.LatLng _ll(LatLng p) => ll.LatLng(p.lat, p.lng);
 LatLng _ours(ll.LatLng p) => LatLng(p.latitude, p.longitude);
@@ -675,6 +676,15 @@ class _ClimbMapScreenState extends State<ClimbMapScreen> {
                           label: Text(_filter.anyGrade ? 'Any grade' : '${kGradeLadder[_filter.minRung]}–${kGradeLadder[_filter.maxRung]}'),
                           onPressed: _pickGrades,
                         ),
+                        if (widget.editor case final e? when e.signedIn) ...[
+                          const SizedBox(width: 6),
+                          // your saved areas, boulders, routes and photos (#518)
+                          ActionChip(
+                            avatar: const Icon(Icons.bookmark_border, size: 18),
+                            label: Text(e.favourites.isEmpty ? 'Saved' : 'Saved ${e.favourites.length}', maxLines: 1, softWrap: false),
+                            onPressed: () => showSavedSheet(context, e, widget.places, _show),
+                          ),
+                        ],
                       ],
                     ),
                   ),

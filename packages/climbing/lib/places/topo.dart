@@ -150,7 +150,19 @@ class TopoLine {
     this.color = '#ffffff',
     this.via = const [],
     this.alone = false,
+    this.id,
+    this.createdBy,
+    this.inGuide = true,
   });
+
+  /// The line's own row in the shared database (#516); null until saved.
+  final String? id;
+
+  /// Who drew it: their credit stays on it.
+  final String? createdBy;
+
+  /// Part of the area's main guide; false for a community line (#500).
+  final bool inGuide;
 
   final String problemId;
   final List<TopoPoint> points;
@@ -167,7 +179,20 @@ class TopoLine {
   /// with lines already on the photo, so the overview doesn't stack them.
   final bool alone;
 
-  TopoLine copyWith({List<TopoPoint>? points, bool? sitStart, TopoEnd? end, String? color, List<String>? via, bool? alone}) => TopoLine(
+  TopoLine copyWith({
+    List<TopoPoint>? points,
+    bool? sitStart,
+    TopoEnd? end,
+    String? color,
+    List<String>? via,
+    bool? alone,
+    String? id,
+    String? createdBy,
+    bool? inGuide,
+  }) => TopoLine(
+    id: id ?? this.id,
+    createdBy: createdBy ?? this.createdBy,
+    inGuide: inGuide ?? this.inGuide,
     problemId: problemId,
     points: points ?? this.points,
     sitStart: sitStart ?? this.sitStart,
@@ -220,9 +245,13 @@ class Topo {
     this.overlay = const TopoOverlay(),
     this.createdBy,
     this.angleOf,
+    this.inGuide = true,
   });
 
   final String id, placeId, photoPath;
+
+  /// Part of the area's main guide; false for a community photo (#500).
+  final bool inGuide;
 
   /// The section's name ('lucka 01'); '' when it has none.
   final String name;
@@ -266,11 +295,13 @@ class Topo {
     overlay: overlay ?? this.overlay,
     createdBy: createdBy,
     angleOf: angleOf,
+    inGuide: inGuide,
   );
 
-  /// The next free letter: A, B, … Z, then AA.
-  String nextLabel() {
-    final used = {for (final m in marks) m.label};
+  /// The next free letter: A, B, … Z, then AA. Letters are unique on a
+  /// whole boulder (#519): pass the ones its other photos use as [taken].
+  String nextLabel({Set<String> taken = const {}}) {
+    final used = {...taken, for (final m in marks) m.label};
     for (var i = 0; ; i++) {
       final l = i < 26 ? String.fromCharCode(65 + i) : '${String.fromCharCode(65 + i ~/ 26 - 1)}${String.fromCharCode(65 + i % 26)}';
       if (!used.contains(l)) return l;
@@ -498,6 +529,7 @@ class Topo {
     overlay: TopoOverlay.fromJson((r['overlay'] as Map?)?.cast<String, dynamic>()),
     createdBy: r['created_by'] as String?,
     angleOf: r['angle_of'] as String?,
+    inGuide: r['in_guide'] != false,
   );
 }
 
@@ -519,3 +551,36 @@ double _segDist(TopoPoint p, TopoPoint a, TopoPoint b, double aspect) {
 
 /// Compass point for a bearing: 'N', 'NE', … ('' when null).
 String bearingLabel(int? b) => b == null ? '' : const ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][((b % 360) / 45).round() % 8];
+
+/// Letters name the same hold on every photo of a boulder (#519), so a
+/// route drawn on one photo through its letters can be drawn again on any
+/// photo that has them. Draws (straight, to be bent by hand) every route of
+/// [elsewhere] that isn't on [t] yet and whose letters all are; returns the
+/// photo and the routes it drew.
+(Topo, List<String>) rebuildFromLetters(Topo t, Iterable<TopoLine> elsewhere) {
+  final here = {for (final m in t.marks) m.label};
+  final drawn = {for (final l in t.lines) l.problemId};
+  var out = t;
+  final added = <String>[];
+  for (final l in elsewhere) {
+    if (l.via.length < 2 || drawn.contains(l.problemId) || !l.via.every(here.contains)) continue;
+    out = out.withRoute(l.problemId, l.via, end: l.end, color: l.color, sitStart: l.sitStart);
+    drawn.add(l.problemId);
+    added.add(l.problemId);
+  }
+  return (out, added);
+}
+
+/// Routes of [elsewhere] that pass a letter on [t] but aren't drawn on it:
+/// a photo joins the guide only once they all are (#519).
+List<String> missingRoutes(Topo t, Iterable<TopoLine> elsewhere) {
+  final here = {for (final m in t.marks) m.label};
+  final drawn = {for (final l in t.lines) l.problemId};
+  return [
+    for (final id in {
+      for (final l in elsewhere)
+        if (!drawn.contains(l.problemId) && l.via.any(here.contains)) l.problemId,
+    })
+      id,
+  ];
+}

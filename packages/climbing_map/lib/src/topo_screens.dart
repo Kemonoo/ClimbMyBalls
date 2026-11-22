@@ -48,13 +48,119 @@ String _dmy(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toStri
 
 int _numberOrder(String n) => (int.tryParse(RegExp(r'^\d+').stringMatch(n) ?? '') ?? 99999) * 100 + (n.length > 0 ? n.codeUnitAt(n.length - 1) % 100 : 0);
 
-enum _Sort { grade, number, name }
 
 /// How tall the pinned photo is: its full height on the screen's width, but
 /// at most [share] of the screen.
 double _photoHeight(BuildContext context, Topo t, {double share = 0.42}) {
   final size = MediaQuery.sizeOf(context);
   return math.min(size.width / t.aspect, size.height * share);
+}
+
+/// Community routes and lines (#517): published, not in the area's main
+/// guide. Drawn in their own colour.
+const communityColor = Color(0xFF6EC6FF);
+
+/// Whether community routes show next to the guide's (one switch for the
+/// whole app while it runs; off by default, so newcomers see the guide).
+final showCommunity = ValueNotifier<bool>(false);
+
+/// Whether new community routes, not proven yet, show too (#520).
+final showNewRoutes = ValueNotifier<bool>(false);
+
+/// With a route picked: false shows only it, true shows the others dimmed
+/// behind it (#517).
+final showOtherLines = ValueNotifier<bool>(false);
+
+/// Published and not in the main guide. Your own drafts are not community:
+/// they show to you whatever the switch says.
+bool isCommunity(Place p) => !p.inGuide && !p.draft;
+
+/// A community route not proven yet (fewer than 3 tops and 3 stars).
+bool isNewRoute(Place p) => isCommunity(p) && !p.proven;
+
+/// Whether the switches show this route: the guide's always, proven
+/// community routes with [showCommunity], new ones with [showNewRoutes] too.
+bool routeShown(Place p) => !isCommunity(p) || (showCommunity.value && (p.proven || showNewRoutes.value));
+
+/// [t] as the guide shows it: its lines, plus community lines when [all].
+Topo guideView(Topo t, PlaceTree tree, {required bool all}) {
+  bool keep(TopoLine l) {
+    final p = tree[l.problemId];
+    if (p != null && p.draft) return true;
+    if (all) return p == null || !isNewRoute(p) || showNewRoutes.value;
+    return l.inGuide && (p?.inGuide ?? true);
+  }
+
+  return t.lines.every(keep) ? t : t.copyWith(lines: [for (final l in t.lines) if (keep(l)) l]);
+}
+
+/// The small button on a photo with a route picked: only it, or the others
+/// dimmed behind it.
+class OtherLinesToggle extends StatelessWidget {
+  const OtherLinesToggle({super.key});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder(
+    valueListenable: showOtherLines,
+    builder: (context, on, _) => Material(
+      color: Colors.black54,
+      shape: const CircleBorder(),
+      child: IconButton(
+        visualDensity: VisualDensity.compact,
+        tooltip: on ? 'Only this route' : 'Show the other routes',
+        isSelected: on,
+        icon: const Icon(Icons.layers_outlined, color: Colors.white, size: 20),
+        selectedIcon: const Icon(Icons.layers, color: Colors.white, size: 20),
+        onPressed: () => showOtherLines.value = !on,
+      ),
+    ),
+  );
+}
+
+/// The switches for community routes: proven ones ([count]), then new
+/// ones not proven yet ([fresh]).
+class CommunityChip extends StatelessWidget {
+  const CommunityChip({super.key, required this.count, this.fresh = 0});
+  final int count, fresh;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([showCommunity, showNewRoutes]),
+    builder: (context, _) {
+      final on = showCommunity.value;
+      return Wrap(
+        spacing: 6,
+        children: [
+          FilterChip(
+            visualDensity: VisualDensity.compact,
+            avatar: Icon(Icons.groups_outlined, size: 18, color: on ? null : communityColor),
+            label: Text(
+              on
+                  ? 'Community routes shown'
+                  : count > 0
+                  ? '+$count community routes'
+                  : '+$fresh new community routes',
+              maxLines: 1,
+              softWrap: false,
+            ),
+            tooltip: count > 0 ? 'Routes from the community that 3 people topped and 3 starred' : 'New routes from the community, not proven yet',
+            selected: on,
+            onSelected: (v) {
+              showCommunity.value = v;
+              if (count == 0) showNewRoutes.value = v; // only new ones here
+            },
+          ),
+          if (on && count > 0 && fresh > 0)
+            FilterChip(
+              visualDensity: VisualDensity.compact,
+              label: Text(showNewRoutes.value ? 'New routes shown' : '+$fresh new, not proven yet', maxLines: 1, softWrap: false),
+              selected: showNewRoutes.value,
+              onSelected: (v) => showNewRoutes.value = v,
+            ),
+        ],
+      );
+    },
+  );
 }
 
 /// A section: its photo pinned on top, the routes on it below, boulders and
@@ -77,16 +183,57 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
   late PlaceTree _tree = widget.tree;
   String? _open; // expanded problem
   String? _mark; // tapped letter
-  var _sort = _Sort.grade;
+  var _sort = RouteSort.grade;
+  Map<String, RouteSummary> _summaries = const {};
   var _original = false;
   late final _tabs = TabController(length: 2, vsync: this);
   final _rowKeys = <String, GlobalKey>{};
 
   @override
+  void initState() {
+    super.initState();
+    showCommunity.addListener(_redraw);
+    showNewRoutes.addListener(_redraw);
+    showOtherLines.addListener(_redraw);
+    _loadSummaries();
+  }
+
+  /// Stars and ascents of the routes on the photo, for the rows and sorting.
+  Future<void> _loadSummaries() async {
+    final e = widget.editor;
+    if (!e.signedIn) return;
+    final ids = {for (final l in _topo.lines) l.problemId}.toList();
+    try {
+      await e.loadStars(StarOn.place, ids);
+      final r = await Future.wait([e.opinionsOn(ids), e.toppedByMe(), e.ascentCounts(ids)]);
+      if (!mounted) return;
+      setState(
+        () => _summaries = routeSummaries(
+          ids,
+          r[0] as List<(String, Opinion)>,
+          r[1] as Set<String>,
+          e.me,
+          routes: {for (final id in ids) if (_tree[id] case final p?) id: p},
+          stars: {for (final id in ids) id: e.starsOf(StarOn.place, id)},
+          ascents: r[2] as Map<String, ({int tops, int flashes})>,
+        ),
+      );
+    } catch (_) {} // the rows work without them
+  }
+
+  void _redraw() => setState(() {});
+
+  @override
   void dispose() {
+    showCommunity.removeListener(_redraw);
+    showNewRoutes.removeListener(_redraw);
+    showOtherLines.removeListener(_redraw);
     _tabs.dispose();
     super.dispose();
   }
+
+  /// The photo as the guide shows it (#517).
+  Topo get _view => guideView(_topo, _tree, all: showCommunity.value);
 
   List<Topo> get _sections {
     final all = widget.editor.toposOf(widget.boulder.id);
@@ -168,12 +315,13 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
       });
       return;
     }
-    final i = _topo.lineAt(p);
+    final view = _view;
+    final i = view.lineAt(p);
     if (i == null) {
       setState(() => _open = null);
       return;
     }
-    final id = _topo.lines[i].problemId;
+    final id = view.lines[i].problemId;
     final rope = _tree[id]?.isRope ?? false;
     setState(() {
       _open = id;
@@ -211,27 +359,20 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
   }
 
   List<(int, Place)> _routes(bool rope) {
-    final through = _mark == null ? null : _topo.linesThrough(_mark!);
+    final view = _view;
+    final through = _mark == null ? null : view.linesThrough(_mark!);
     final numbers = problemNumbers(_tree, widget.boulder.id);
     final rows = <(int, Place)>[];
     final seen = <String>{};
-    for (var i = 0; i < _topo.lines.length; i++) {
-      final p = _tree[_topo.lines[i].problemId];
+    for (var i = 0; i < view.lines.length; i++) {
+      final p = _tree[view.lines[i].problemId];
       if (p == null || p.isRope != rope || !seen.add(p.id)) continue;
       if (through != null && !through.contains(i)) continue;
       rows.add((i, p));
     }
-    int byGrade((int, Place) a, (int, Place) b) {
-      final c = gradeOrder(a.$2.grade, a.$2.gradeSystem).compareTo(gradeOrder(b.$2.grade, b.$2.gradeSystem));
-      return c != 0 ? c : a.$2.name.compareTo(b.$2.name);
-    }
-
-    rows.sort(switch (_sort) {
-      _Sort.grade => byGrade,
-      _Sort.number => (a, b) => _numberOrder(numbers[a.$2.id] ?? '').compareTo(_numberOrder(numbers[b.$2.id] ?? '')),
-      _Sort.name => (a, b) => a.$2.name.toLowerCase().compareTo(b.$2.name.toLowerCase()),
-    });
-    return rows;
+    final order = sortRoutes([for (final (_, p) in rows) p], _sort, summaries: _summaries, numbers: numbers);
+    final at = {for (final (i, p) in rows) p.id: i};
+    return [for (final p in order) (at[p.id]!, p)];
   }
 
   @override
@@ -243,9 +384,16 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
     final index = math.max(0, sections.indexWhere((t) => t.id == _sectionId));
     final photos = _photos;
     final boulders = _routes(false), rope = _routes(true);
-    final openLine = _open == null ? null : _topo.lines.indexWhere((l) => l.problemId == _open);
-    final lit = _mark != null ? _topo.linesThrough(_mark!) : {if (openLine != null && openLine >= 0) openLine};
-    final shown = _original ? _topo.copyWith(lines: const [], marks: const []) : _topo;
+    final view = _view;
+    final openLine = _open == null ? null : view.lines.indexWhere((l) => l.problemId == _open);
+    final picked = _mark == null && openLine != null && openLine >= 0;
+    final lit = _mark != null ? view.linesThrough(_mark!) : {if (picked && showOtherLines.value) openLine};
+    final shown = _original ? _topo.copyWith(lines: const [], marks: const []) : view;
+    final onPhoto = {
+      for (final l in _topo.lines)
+        if (_tree[l.problemId] case final p? when isCommunity(p)) p.id: p,
+    }.values;
+    final community = onPhoto.where((p) => p.proven).length, fresh = onPhoto.length - community;
 
     Widget list(List<(int, Place)> rows, String empty) => rows.isEmpty
         ? Padding(
@@ -262,6 +410,7 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
                 key: _rowKeys.putIfAbsent(p.id, GlobalKey.new),
                 problem: p,
                 number: numbers[p.id] ?? '',
+                summary: _summaries[p.id],
                 open: _open == p.id,
                 onOpen: () => _openRoute(p),
                 onExpand: () => setState(() {
@@ -316,18 +465,18 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
               selectedIcon: const Icon(Icons.auto_stories),
               onPressed: () => setState(() => _original = !_original),
             ),
-          PopupMenuButton<_Sort>(
+          PopupMenuButton<RouteSort>(
             tooltip: 'Sort',
             icon: const Icon(Icons.sort),
             initialValue: _sort,
             onSelected: (s) => setState(() => _sort = s),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: _Sort.grade, child: Text('By grade')),
-              PopupMenuItem(value: _Sort.number, child: Text('By number')),
-              PopupMenuItem(value: _Sort.name, child: Text('By name')),
-            ],
+            itemBuilder: (_) => [for (final s in RouteSort.values) PopupMenuItem(value: s, child: Text(s.label))],
           ),
-          if (canEditTopo(widget.editor, _topo)) IconButton(tooltip: 'Edit section', icon: const Icon(Icons.edit_outlined), onPressed: _edit),
+          if (canEditTopo(widget.editor, _topo))
+            IconButton(tooltip: 'Edit section', icon: const Icon(Icons.edit_outlined), onPressed: _edit)
+          else if (widget.editor.signedIn)
+            // anyone draws their route on any photo (#519)
+            IconButton(tooltip: 'Draw your route here', icon: const Icon(Icons.draw_outlined), onPressed: _edit),
         ],
       ),
       body: Column(
@@ -336,24 +485,38 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
             height: _photoHeight(context, _topo),
             child: ColoredBox(
               color: Colors.black,
-              child: TopoCanvas(
-                key: ValueKey('${_topo.id}$_original'),
-                topo: shown,
-                photo: widget.editor.photoOf(_topo, original: _original),
-                lit: lit,
-                litMark: _mark,
-                numbers: numbers,
-                onTap: _tapPhoto,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: TopoCanvas(
+                      key: ValueKey('${_topo.id}$_original'),
+                      topo: shown,
+                      photo: widget.editor.photoOf(_topo, original: _original),
+                      lit: lit,
+                      only: picked && !showOtherLines.value ? openLine : null,
+                      litMark: _mark,
+                      numbers: numbers,
+                      onTap: _tapPhoto,
+                    ),
+                  ),
+                  if (picked && !_original) const Positioned(top: 6, right: 6, child: OtherLinesToggle()),
+                ],
               ),
             ),
           ),
-          if (photos.length > 1 || widget.editor.signedIn)
+          if (photos.length > 1 || widget.editor.signedIn || community + fresh > 0)
+            // star and save this photo, community routes, the other angles
             SizedBox(
               height: 44,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 children: [
+                  if (widget.editor.signedIn) ...[
+                    StarButton(key: ValueKey('star${_topo.id}'), editor: widget.editor, kind: StarOn.topo, id: _topo.id),
+                    FavouriteButton(key: ValueKey('fav${_topo.id}'), editor: widget.editor, kind: StarOn.topo, id: _topo.id),
+                  ],
+                  if (community + fresh > 0) Padding(padding: const EdgeInsets.only(right: 6), child: CommunityChip(count: community, fresh: fresh)),
                   if (photos.length > 1)
                     for (var i = 0; i < photos.length; i++)
                       Padding(
@@ -446,8 +609,9 @@ class _RouteRow extends StatelessWidget {
               padding: const EdgeInsets.only(left: 8),
               child: Row(
                 children: [
+                  Container(width: 3, height: 28, color: isCommunity(p) ? communityColor : Colors.transparent),
                   SizedBox(
-                    width: 64,
+                    width: 61,
                     child: Text(
                       switch (summary?.grade) {
                         final g? when g.isNotEmpty => g,
@@ -470,6 +634,11 @@ class _RouteRow extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(left: 6),
                       child: Text(start, style: text.labelMedium?.copyWith(color: cs.primary)),
+                    ),
+                  if (summary case final s? when s.stars > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: Text('★${s.stars}', style: text.labelMedium?.copyWith(color: Colors.amber.shade700)),
                     ),
                   if (summary?.project ?? false)
                     const Padding(
@@ -547,7 +716,6 @@ class _RouteScreenState extends State<RouteScreen> {
   List<RouteComment> _comments = const [];
   String? _error;
   var _busy = false;
-  var _showRatings = false;
   final _comment = TextEditingController();
 
   List<Topo> get _onTopos => [
@@ -559,11 +727,15 @@ class _RouteScreenState extends State<RouteScreen> {
   @override
   void initState() {
     super.initState();
+    showOtherLines.addListener(_redraw);
     _load();
   }
 
+  void _redraw() => setState(() {});
+
   @override
   void dispose() {
+    showOtherLines.removeListener(_redraw);
     _comment.dispose();
     super.dispose();
   }
@@ -803,7 +975,22 @@ class _RouteScreenState extends State<RouteScreen> {
                 height: _photoHeight(context, t, share: 0.32),
                 child: ColoredBox(
                   color: Colors.black,
-                  child: TopoCanvas(topo: t, photo: widget.editor.photoOf(t), only: line >= 0 ? line : null, numbers: numbers),
+                  child: Builder(
+                    builder: (context) {
+                      // the others as the guide shows them; this route always
+                      final view = guideView(t, widget.tree, all: showCommunity.value || isCommunity(p) || p.draft);
+                      final i = view.lines.indexWhere((l) => l.problemId == p.id);
+                      final others = showOtherLines.value && i >= 0;
+                      return Stack(
+                        children: [
+                          Positioned.fill(
+                            child: TopoCanvas(topo: view, photo: widget.editor.photoOf(t), only: i >= 0 && !others ? i : null, lit: {if (others) i}, numbers: numbers),
+                          ),
+                          if (i >= 0 && view.lines.length > 1) const Positioned(top: 6, right: 6, child: OtherLinesToggle()),
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
             TabBar(
@@ -832,11 +1019,6 @@ class _RouteScreenState extends State<RouteScreen> {
     ];
     final chart = gradeVotes(p.grade, scale, votes);
     final community = averageGrade(p.grade, scale, votes);
-    final rated = [
-      for (final o in _opinions)
-        if (o.stars > 0) o,
-    ];
-    final avg = rated.isEmpty ? 0.0 : rated.map((o) => o.stars).reduce((a, b) => a + b) / rated.length;
     final tags = {
       for (final (t, n) in tagCounts([for (final o in _opinions) o.tags])) t.id: n,
     };
@@ -879,37 +1061,17 @@ class _RouteScreenState extends State<RouteScreen> {
             ),
           const Divider(height: 32),
         ],
-        Text('What do you think of this route?', style: text.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
         Row(
           children: [
-            for (var i = 1; i <= 5; i++)
-              IconButton(
-                tooltip: '$i ${i == 1 ? 'star' : 'stars'}',
-                onPressed: widget.editor.signedIn ? () => _opinion(stars: mine?.stars == i ? 0 : i) : null,
-                icon: Icon(i <= (mine?.stars ?? 0) ? Icons.star_rounded : Icons.star_outline_rounded, size: 34, color: Colors.amber),
+            Expanded(
+              child: Text(
+                topped ? 'Liked it? Star it.' : 'Stars are from people who topped it.',
+                style: text.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
+            ),
+            StarButton(editor: widget.editor, kind: StarOn.place, id: p.id, blocked: topped ? null : 'Top it first, then star it.'),
+            FavouriteButton(editor: widget.editor, kind: StarOn.place, id: p.id),
           ],
-        ),
-        Card(
-          margin: const EdgeInsets.only(top: 4),
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.person_outline),
-                title: Text(rated.isEmpty ? 'No ratings yet' : '★ ${avg.toStringAsFixed(1)} · ${rated.length} ${rated.length == 1 ? 'rating' : 'ratings'}'),
-                trailing: rated.isEmpty ? null : Icon(_showRatings ? Icons.expand_less : Icons.expand_more),
-                onTap: rated.isEmpty ? null : () => setState(() => _showRatings = !_showRatings),
-              ),
-              if (_showRatings)
-                for (final o in rated)
-                  ListTile(
-                    dense: true,
-                    title: Text(o.who.isEmpty ? 'Someone' : o.who),
-                    trailing: Text('★' * o.stars, style: const TextStyle(color: Colors.amber)),
-                  ),
-            ],
-          ),
         ),
         const Divider(height: 32),
         Text("What's it like?", style: text.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
@@ -1370,6 +1532,46 @@ class TopoEditorScreen extends StatefulWidget {
 
 class _TopoEditorScreenState extends State<TopoEditorScreen> {
   late Topo _topo = widget.topo;
+
+  /// The boulder's other photos (sections and their angles): their letters
+  /// name the same holds as here (#519).
+  late final List<Topo> _others = [
+    for (final s in widget.editor.toposOf(widget.boulder.id))
+      for (final t in [s, ...widget.editor.anglesOf(s)])
+        if (t.id != widget.topo.id) t,
+    if (widget.reference case final r? when !widget.editor.toposOf(widget.boulder.id).any((s) => s.id == r.id)) r,
+  ];
+  late final Set<String> _boulderLetters = {
+    for (final t in _others)
+      for (final m in t.marks) m.label,
+  };
+  late final List<TopoLine> _otherLines = [for (final t in _others) ...t.lines];
+
+  /// The letters already on this photo when it opened: on someone else's
+  /// photo you may add letters, not move or change these.
+  late final Set<String> _before = {for (final m in widget.topo.marks) m.label};
+  bool get _owner => widget.newPhoto != null || canEditTopo(widget.editor, widget.topo);
+
+  /// A letter from the boulder's other photos, to put down with the next tap.
+  String? _nextLetter;
+
+  String get _newLabel => _nextLetter ?? _topo.nextLabel(taken: _boulderLetters);
+
+  /// Draws every route whose letters are all here now, straight.
+  void _rebuild() {
+    final (t, added) = rebuildFromLetters(_topo, _otherLines);
+    if (added.isEmpty) return;
+    setState(() => _topo = t);
+    final numbers = problemNumbers(_tree, widget.boulder.id);
+    final names = [for (final id in added) if (_tree[id] case final p?) displayName(p, numbers[id])];
+    _say('Drew ${names.join(', ')} from their letters, straight. If a route curves, bend it with Bend.');
+  }
+
+  bool _locked(String label) {
+    if (_owner || !_before.contains(label)) return false;
+    _say("Only the photo's maker or an editor can change the letters already here. You can add new ones.");
+    return true;
+  }
   late PlaceTree _tree = widget.tree;
   late final _name = TextEditingController(text: widget.topo.name);
   late var _tool = widget.topo.marks.any((m) => m.hold) ? _Tool.routes : _Tool.holds;
@@ -1479,9 +1681,13 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
       case _Tool.holds:
         final h = _holdAt(p);
         if (h != null) {
-          _holdSheet(h);
+          if (!_locked(h)) _holdSheet(h);
         } else {
-          setState(() => _topo = _topo.copyWith(marks: [..._topo.marks, TopoMark(_topo.nextLabel(), p, hold: true)]));
+          setState(() {
+            _topo = _topo.copyWith(marks: [..._topo.marks, TopoMark(_newLabel, p, hold: true)]);
+            _nextLetter = null;
+          });
+          _rebuild();
         }
       case _Tool.routes:
         if (_problem == null) return _say('Tap "Draw a route" first.');
@@ -1535,10 +1741,17 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
       // a drag on bare photo puts a new hold down and slides it under the
       // magnifier; let go where it belongs
       _dragHold = _holdAt(p);
-      if (_dragHold == null) {
-        final label = _topo.nextLabel();
-        setState(() => _topo = _topo.copyWith(marks: [..._topo.marks, TopoMark(label, p, hold: true)]));
+      if (_dragHold != null && !_owner && _before.contains(_dragHold)) {
+        _dragHold = null;
+        _locked(_holdAt(p)!);
+      } else if (_dragHold == null) {
+        final label = _newLabel;
+        setState(() {
+          _topo = _topo.copyWith(marks: [..._topo.marks, TopoMark(label, p, hold: true)]);
+          _nextLetter = null;
+        });
         _dragHold = label;
+        _placing = true;
       }
     } else if (_tool == _Tool.bend) {
       final e = _edgeNear(p);
@@ -1558,10 +1771,19 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
     }
   }
 
-  void _dragEnd() => setState(() {
-    _dragHold = _bendEdge = null;
-    _finger = null;
-  });
+  /// A new hold is being slid into place: routes are drawn once it lands.
+  var _placing = false;
+
+  void _dragEnd() {
+    setState(() {
+      _dragHold = _bendEdge = null;
+      _finger = null;
+    });
+    if (_placing) {
+      _placing = false;
+      _rebuild();
+    }
+  }
 
   /// A round lens above the finger showing the photo under it 2.5× bigger,
   /// with a cross on the exact spot; below the finger near the top.
@@ -1693,9 +1915,16 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
     final draftLine = _problem == null ? null : shown.lines.where((l) => l.problemId == _problem).firstOrNull;
     final hasLine = _problem != null && _topo.lines.any((l) => l.problemId == _problem);
     final holds = _topo.marks.where((m) => m.hold).length;
+    final missing = missingRoutes(_topo, _otherLines);
+    final spare = [
+      for (final l in _boulderLetters.toList()..sort((a, b) => a.length != b.length ? a.length - b.length : a.compareTo(b)))
+        if (_topo.markNamed(l) == null) l,
+    ];
     final hint = switch (_tool) {
       _Tool.holds =>
-        'Tap the photo to put ${_topo.nextLabel()} there, or press and slide to place it under the magnifier. Drag a hold to move it, tap it to rename or delete it.',
+        'Tap the photo to put $_newLabel there, or press and slide to place it under the magnifier. Drag a hold to move it, tap it to rename or delete it.',
+      _Tool.routes when _problem == null && missing.isNotEmpty =>
+        'Not drawn here yet: ${[for (final id in missing.take(6)) if (_tree[id] case final p?) displayName(p, numbers[id])].join(', ')}. Put their letters down with Holds and they draw themselves.',
       _Tool.routes when _problem == null =>
         holds < 2
             ? widget.reference != null
@@ -1710,7 +1939,7 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
         toolbarHeight: 48,
         title: Text('${widget.topo.angleOf == null ? 'Section' : 'Another angle'} · ${widget.boulder.name}', overflow: TextOverflow.ellipsis),
         actions: [
-          if (widget.newPhoto == null) IconButton(tooltip: 'Delete section', onPressed: _deleteSection, icon: const Icon(Icons.delete_outline)),
+          if (widget.newPhoto == null && _owner) IconButton(tooltip: 'Delete section', onPressed: _deleteSection, icon: const Icon(Icons.delete_outline)),
           TextButton(onPressed: _saving ? null : _save, child: Text(_saving ? 'Saving…' : 'Save')),
         ],
       ),
@@ -1723,6 +1952,7 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
                 Expanded(
                   child: TextField(
                     controller: _name,
+                    readOnly: !_owner,
                     decoration: const InputDecoration(labelText: 'Section name', isDense: true, border: OutlineInputBorder()),
                   ),
                 ),
@@ -1734,11 +1964,33 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
                     const DropdownMenuItem<int?>(value: null, child: Text('Faces ?')),
                     for (var b = 0; b < 360; b += 45) DropdownMenuItem<int?>(value: b, child: Text('Faces ${bearingLabel(b)}')),
                   ],
-                  onChanged: (b) => setState(() => _topo = _topo.copyWith(bearing: () => b)),
+                  onChanged: _owner ? (b) => setState(() => _topo = _topo.copyWith(bearing: () => b)) : null,
                 ),
               ],
             ),
           );
+          final letters = _tool != _Tool.holds || spare.isEmpty
+              ? null
+              : SizedBox(
+                  height: 40,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    children: [
+                      Center(child: Text('From other photos:  ', style: Theme.of(context).textTheme.bodySmall)),
+                      for (final l in spare)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: ChoiceChip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(l, maxLines: 1, softWrap: false),
+                            selected: _nextLetter == l,
+                            onSelected: (on) => setState(() => _nextLetter = on ? l : null),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
           final tools = Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: SizedBox(
@@ -1824,6 +2076,7 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
                         children: [
                           details,
                           tools,
+                          ?letters,
                           Padding(
                             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                             child: Text(hint, style: Theme.of(context).textTheme.bodyMedium),
@@ -1845,6 +2098,7 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
                 children: [
                   details,
                   tools,
+                  ?letters,
                   Container(
                     height: 44, // fixed, so the photo doesn't jump when the hint changes
                     alignment: Alignment.centerLeft,

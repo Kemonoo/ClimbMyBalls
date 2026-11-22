@@ -166,6 +166,72 @@ void main() {
     expect(e.anglesOf(e.toposOf('b').single).map((t) => t.id), ['a']);
   });
 
+  test("lines come from their own rows (#516); drawing on someone else's photo saves only your line", () async {
+    const t = Topo(
+      id: 't',
+      placeId: 'b',
+      photoPath: 'x.jpg',
+      createdBy: 'owner',
+      lines: [TopoLine(problemId: 'old', points: [TopoPoint(0, 0), TopoPoint(1, 1)])], // the copy in the section's row
+    );
+    CloudLine row(String id, String problem, int ord, {String by = 'owner'}) => CloudLine(
+      topoId: 't',
+      ord: ord,
+      updatedAt: DateTime.utc(2026, 11, 22),
+      line: TopoLine(id: id, problemId: problem, createdBy: by, points: const [TopoPoint(0, 1), TopoPoint(1, 0)]),
+    );
+    final p = SharedPlaces(
+      bundled: const [
+        Place(id: 'b', kind: PlaceKind.boulder, name: 'Lúčka'),
+        Place(id: 'p1', parentId: 'b', kind: PlaceKind.problem, name: 'One'),
+        Place(id: 'p2', parentId: 'b', kind: PlaceKind.problem, name: 'Two'),
+        Place(id: 'mine', parentId: 'b', kind: PlaceKind.problem, name: 'Mine'),
+        Place(id: 'old', parentId: 'b', kind: PlaceKind.problem, name: 'Old'),
+      ],
+      cloud: ClimbCloud(SupabaseClient('https://example.supabase.co', 'public-key')), // signed out: not an editor
+      cacheFile: _Box(),
+      outbox: Outbox(file: _Box()),
+    );
+    p.topos.merge([CloudTopo(topo: t, updatedAt: DateTime.utc(2026, 11, 22))]);
+    final e = CloudPlaceEditor(p);
+    expect(e.toposOf('b').single.lines.map((l) => l.problemId), ['old'], reason: "before lines have rows: the section's own");
+
+    p.lines.merge([row('l2', 'p2', 1), row('l1', 'p1', 0)]);
+    final shown = e.toposOf('b').single;
+    expect(shown.lines.map((l) => l.problemId), ['p1', 'p2'], reason: 'from the rows, in their order');
+
+    // add your route's line; someone else's line you can't take away
+    await e.saveTopo(shown.copyWith(lines: [shown.lines[1], const TopoLine(problemId: 'mine', points: [TopoPoint(.5, .5), TopoPoint(.6, .1)])]));
+    final ops = p.outbox.ops.map((o) => o.kind).toList();
+    expect(ops, ['line.save'], reason: "not the section (not yours), not the others' lines");
+    final saved = p.outbox.ops.single.data;
+    expect((saved['problem_id'], saved['ord'], saved['in_guide']), ('mine', 1, false), reason: 'a community line');
+    expect(e.toposOf('b').single.lines.map((l) => l.problemId), ['p1', 'p2', 'mine'], reason: 'shown at once');
+  });
+
+  test('stars and favourites work without signal and wait in the outbox (#518)', () async {
+    final file = _Box();
+    final p = SharedPlaces(
+      bundled: const [Place(id: 'b', kind: PlaceKind.boulder, name: 'Lúčka')],
+      cloud: ClimbCloud(SupabaseClient('https://example.supabase.co', 'public-key')),
+      cacheFile: file,
+      outbox: Outbox(file: _Box()),
+    );
+    final e = CloudPlaceEditor(p);
+    p.starCounts['place:b'] = 4;
+    await e.setStar('place', 'b', true);
+    expect((e.starredByMe('place', 'b'), e.starsOf('place', 'b')), (true, 5));
+    await e.setStar('place', 'b', true);
+    expect(e.starsOf('place', 'b'), 5, reason: 'a second tap on a starred thing does not count twice');
+    await e.setFavourite('topo', 't1', true);
+    await e.setFavourite('place', 'b', true);
+    expect(e.favourites, [('place', 'b'), ('topo', 't1')], reason: 'newest first');
+    await e.setFavourite('topo', 't1', false);
+    expect(e.favourites, [('place', 'b')]);
+    expect(p.outbox.ops.map((o) => o.kind), ['star', 'star', 'fav', 'fav', 'fav']);
+    expect(file.text, contains('"stars":["place:b"]'), reason: 'kept on the phone');
+  });
+
   test('Wi-Fi only: nothing is sent on mobile data', () async {
     final o = Outbox(wifiOnly: true)..add('tick.remove', {'id': 'x'});
     final p = SharedPlaces(bundled: const [], outbox: o, onWifi: () async => false);

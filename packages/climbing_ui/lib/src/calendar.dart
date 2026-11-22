@@ -99,13 +99,15 @@ class _ClimbCalendarState extends State<_ClimbCalendar> {
             onTap: s == null ? null : () => showClimbSessionSheet(context, s.id),
             child: ExcludeSemantics(
               child: Stack(children: [
-                Positioned(left: 5, top: 3, child: Text('${date.day}', style: look.text(10, color: s == null ? look.muted : Colors.white))),
+                Positioned(left: 5, top: 2, child: Text('${date.day}', textScaler: TextScaler.noScaling, style: look.text(10, color: s == null ? look.muted : Colors.white))),
                 if (s != null)
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(grade ?? '·', style: look.text(13, bold: true, color: Colors.white)),
-                    ),
+                  // Its own box under the day number; shrinks to fit at large text sizes.
+                  Positioned(
+                    left: 2,
+                    right: 2,
+                    top: 15,
+                    bottom: 3,
+                    child: FittedBox(fit: BoxFit.scaleDown, child: Text(grade ?? '·', style: look.text(13, bold: true, color: Colors.white))),
                   ),
                 if (s != null && s.outdoor) const Positioned(right: 3, top: 3, child: Icon(Icons.landscape_outlined, size: 11, color: Colors.white)),
               ]),
