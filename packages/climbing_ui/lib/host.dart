@@ -35,8 +35,14 @@ class ClimbTheme {
     required this.onAccent,
     required this.calm,
     required this.textStyle,
+    this.send = const Color(0xFFFF0A8C),
+    this.sendDeep = const Color(0xFF9A0B5E),
   });
   final Color ink, muted, line, surface, accent, accentDeep, onAccent, calm;
+
+  /// Sends, and the flashed part of them: TopLogger's magenta and wine unless
+  /// the host has its own (hibi uses its Skills violet, #487).
+  final Color send, sendDeep;
   final TextStyle Function(double size, bool bold, Color? color, double? height) textStyle;
 
   TextStyle text(double size, {bool bold = false, Color? color, double? height}) => textStyle(size, bold, color, height);

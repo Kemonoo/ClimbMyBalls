@@ -256,6 +256,13 @@ class ClimbCloud implements CloudAccount {
   /// Adds [p], or saves changes to a place you created.
   Future<void> savePlace(Place p) => db.from('places').upsert(placeToRow(p));
 
+  /// Makes your private route visible to everyone; [verify] also checks it
+  /// (place editors only).
+  Future<void> publishPlace(String id, {bool verify = false}) => db.from('places').update({'draft': false, if (verify) 'verified': true}).eq('id', id);
+
+  /// Sets or clears a route's check mark (place editors only).
+  Future<void> verifyPlace(String id, bool verified) => db.from('places').update({'verified': verified}).eq('id', id);
+
   /// Marks a place you created as deleted.
   Future<void> deletePlace(String id) => db.from('places').update({'deleted': true}).eq('id', id);
 

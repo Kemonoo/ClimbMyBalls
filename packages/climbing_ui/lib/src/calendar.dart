@@ -1,8 +1,8 @@
 part of '../climbing_ui.dart';
 
-/// A month of climbing: each day you climbed shows that session's top 10
-/// grade (a day with two sessions shows the better one), and the month's own
-/// top 10 average sits above. Tap a day for its session.
+/// A month of climbing: each day you climbed shows that session's average
+/// grade over its sends (a day with two sessions shows the better one), and
+/// the month's top 10 average sits above. Tap a day for its session.
 class _ClimbCalendar extends StatefulWidget {
   const _ClimbCalendar({required this.look, required this.sessions});
   final ClimbTheme look;
@@ -30,7 +30,7 @@ class _ClimbCalendarState extends State<_ClimbCalendar> {
     for (final s in widget.sessions) {
       if (s.start.year != month.year || s.start.month != month.month) continue;
       final had = byDay[s.start.day];
-      if (had == null || (s.topGradeIndex ?? -1) > (had.topGradeIndex ?? -1)) byDay[s.start.day] = s;
+      if (had == null || (s.dayLevel?.index ?? -1) > (had.dayLevel?.index ?? -1)) byDay[s.start.day] = s;
     }
     final first = widget.sessions.isEmpty ? now : widget.sessions.map((s) => s.start).reduce((a, b) => a.isBefore(b) ? a : b);
     final canBack = DateTime(first.year, first.month).isBefore(month);
@@ -80,9 +80,9 @@ class _ClimbCalendarState extends State<_ClimbCalendar> {
 
   Widget _day(BuildContext context, ClimbTheme look, DateTime date, ClimbSession? s, DateTime now) {
     final today = date.year == now.year && date.month == now.month && date.day == now.day;
-    final grade = s?.topLevel?.grade;
+    final grade = s?.dayLevel?.grade;
     final style = s?.style ?? ClimbStyle.boulder;
-    final c = s == null ? null : (style == ClimbStyle.boulder ? _pink : look.calm);
+    final c = s == null ? null : (style == ClimbStyle.boulder ? look.send : look.calm);
     return AspectRatio(
       aspectRatio: 1,
       child: Semantics(

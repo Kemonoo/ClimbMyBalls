@@ -23,6 +23,8 @@ class CloudPlace {
       source: r['source'] as String? ?? 'manual',
       licence: r['licence'] as String? ?? 'ODbL',
       details: (r['details'] as Map?)?.cast<String, Object?>() ?? const {},
+      draft: r['draft'] == true,
+      verified: r['verified'] != false,
     ),
     createdBy: r['created_by'] as String?,
     updatedAt: DateTime.parse(r['updated_at'] as String),
@@ -33,6 +35,7 @@ class CloudPlace {
   /// For the phone's own copy (the same shape as a row).
   Map<String, dynamic> toRow() => {
     ...placeToRow(place),
+    'verified': place.verified,
     'created_by': createdBy,
     'updated_at': updatedAt.toUtc().toIso8601String(),
     if (createdAt != null) 'created_at': createdAt!.toUtc().toIso8601String(),
@@ -41,7 +44,8 @@ class CloudPlace {
 }
 
 /// The columns the app writes; created_by, the times and deleted are set by
-/// the database.
+/// the database. Not `verified`: only [ClimbCloud.publishPlace] and
+/// [ClimbCloud.verifyPlace] change it (008_route_status.sql guards it).
 Map<String, dynamic> placeToRow(Place p) => {
   'id': p.id,
   'parent_id': p.parentId,
@@ -54,6 +58,7 @@ Map<String, dynamic> placeToRow(Place p) => {
   'source': p.source,
   'licence': p.licence,
   'details': p.details,
+  'draft': p.draft,
 };
 
 /// The phone's copy of the shared places: merges what's new and drops what

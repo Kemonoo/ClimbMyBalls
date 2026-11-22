@@ -98,6 +98,20 @@ void main() {
     expect(placeToRow(p).containsKey('created_by'), isFalse); // the database sets it
   });
 
+  test('private and verified come from the row; the app never writes verified itself', () {
+    const p = Place(id: 'r', parentId: 'b', kind: PlaceKind.problem, name: 'New', draft: true, verified: false);
+    expect(placeToRow(p)['draft'], isTrue);
+    expect(placeToRow(p).containsKey('verified'), isFalse, reason: 'only publish/verify change it (008_route_status.sql)');
+    final row = {...placeToRow(p), 'verified': false, 'created_by': 'u1', 'updated_at': '2026-11-21T20:00:00Z'};
+    final back = CloudPlace.fromRow(row);
+    expect((back.place.draft, back.place.verified), (true, false));
+    expect(CloudPlace.fromRow(back.toRow()).place.verified, isFalse, reason: 'the phone keeps it');
+    final old = Map.of(row)
+      ..remove('verified')
+      ..remove('draft');
+    expect((CloudPlace.fromRow(old).place.draft, CloudPlace.fromRow(old).place.verified), (false, true), reason: 'rows from before 008');
+  });
+
   test('the cache merges new rows, drops deleted ones, and remembers the newest change', () {
     CloudPlace row(String id, String at, {bool deleted = false}) =>
         CloudPlace.fromRow({'id': id, 'kind': 'boulder', 'name': id, 'updated_at': at, 'deleted': deleted});

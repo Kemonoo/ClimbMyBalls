@@ -2,10 +2,12 @@ part of '../climbing_map.dart';
 
 /// What the boulder page knows about a route beyond the route itself: what
 /// people think of it and what you did on it.
-typedef RouteSummary = ({double stars, int ratings, Set<String> tags, bool topped, bool project});
+///
+/// [grade] is the community grade ([averageGrade]); '' until someone votes.
+typedef RouteSummary = ({double stars, int ratings, Set<String> tags, bool topped, bool project, String grade});
 
 /// Everyone's opinions of some routes and your ascents, as one summary each.
-Map<String, RouteSummary> routeSummaries(Iterable<String> ids, List<(String, Opinion)> opinions, Set<String> topped, String? me) {
+Map<String, RouteSummary> routeSummaries(Iterable<String> ids, List<(String, Opinion)> opinions, Set<String> topped, String? me, {Map<String, Place> routes = const {}}) {
   final by = <String, List<Opinion>>{};
   for (final (id, o) in opinions) {
     (by[id] ??= []).add(o);
@@ -24,6 +26,10 @@ Map<String, RouteSummary> routeSummaries(Iterable<String> ids, List<(String, Opi
           tags: {for (final o in os) ...o.tags},
           topped: topped.contains(id),
           project: os.any((o) => o.userId == me && o.project),
+          grade: switch (routes[id]) {
+            final p? => averageGrade(p.grade, p.isRope ? GradeSystem.uiaa : GradeSystem.font, [for (final o in os) o.grade]) ?? '',
+            null => '',
+          },
         );
       }(),
   };

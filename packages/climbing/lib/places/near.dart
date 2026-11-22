@@ -197,6 +197,23 @@ int? gradeStep(String grade, GradeSystem scale) {
   return i < 0 ? null : i;
 }
 
+/// The community grade (#468): the average of everyone's votes counted in
+/// [gradeSteps], like TopLogger, with the proposed [grade] as one more vote
+/// so a single voter can't move it alone. Rounded to the nearest step (a
+/// half rounds up). Null without votes, or when the grade is not on the
+/// scale.
+String? averageGrade(String grade, GradeSystem scale, Iterable<String> votes) {
+  final at = gradeStep(grade, scale);
+  if (at == null) return null;
+  final steps = [
+    for (final v in votes)
+      if (gradeStep(v, scale) case final s?) s,
+  ];
+  if (steps.isEmpty) return null;
+  final mean = (steps.fold(at, (a, b) => a + b)) / (steps.length + 1);
+  return gradeSteps(scale)[(mean + 0.5).floor()];
+}
+
 /// The votes on a route as a chart: [radius] steps either side of its
 /// grade, each with how many people felt it was that grade.
 ({List<String> steps, List<int> counts, int at})? gradeVotes(String grade, GradeSystem scale, Iterable<String> votes, {int radius = 4}) {

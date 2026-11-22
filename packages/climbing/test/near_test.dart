@@ -120,6 +120,18 @@ void _grades() {
     expect(gradeVotes('blue', GradeSystem.font, const []), isNull);
   });
 
+  test('community grade: the average in grade steps, the proposed grade counting as one vote (#468)', () {
+    const f = GradeSystem.font;
+    expect(averageGrade('6B', f, const []), isNull, reason: 'no votes: the proposed grade stands');
+    expect(averageGrade('6B', f, ['6C']), '6B+', reason: 'one voter moves it half way');
+    expect(averageGrade('6B', f, ['6C', '6C', '6C']), '6C', reason: '(0 + 2+2+2) / 4 = 1.5 steps up, a half rounds up');
+    expect(averageGrade('7A', f, ['6C+', '6C+', '6C+', 'gym blue']), '6C+', reason: 'grades off the scale are not votes');
+    expect(averageGrade('7A', f, ['6C+']), '7A', reason: 'half way rounds up');
+    expect(averageGrade('7A+/B', f, ['7B']), '7B', reason: 'in-between grades count as their lower step');
+    expect(averageGrade('8', GradeSystem.uiaa, ['8+', '8+']), isNotNull);
+    expect(averageGrade('blue', f, ['6A']), isNull);
+  });
+
   test('tag counts: one per person, most given first', () {
     final c = tagCounts([
       ['crimps', 'slab'],

@@ -5,6 +5,7 @@ import 'package:climb/shared_places.dart';
 import 'package:climb/storage/text_box.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:climbing/places/place.dart';
+import 'package:climbing/places/topo.dart';
 import 'package:climbing_cloud/climbing_cloud.dart';
 
 class _Box implements TextBox {
@@ -110,6 +111,59 @@ void main() {
 
     await p.change('place.delete', {'id': 'r1'});
     expect(p.tree['r1'], isNull);
+  });
+
+  test('publish and verify show at once and wait in the outbox; a new route starts unverified', () async {
+    final p = SharedPlaces(
+      bundled: const [Place(id: 'b', kind: PlaceKind.boulder, name: 'Lúčka')],
+      cloud: ClimbCloud(SupabaseClient('https://example.supabase.co', 'public-key')),
+      cacheFile: _Box(),
+      outbox: Outbox(file: _Box()),
+    );
+    final e = CloudPlaceEditor(p);
+    await e.save(const Place(id: 'r1', parentId: 'b', kind: PlaceKind.problem, name: 'New line', grade: '6A', draft: true));
+    expect((p.tree['r1']!.draft, p.tree['r1']!.verified), (true, false));
+    await e.publish(p.tree['r1']!);
+    expect((p.tree['r1']!.draft, p.tree['r1']!.verified), (false, false), reason: 'not an editor, so not verified');
+    await e.setVerified(p.tree['r1']!, true);
+    expect(p.tree['r1']!.verified, isTrue);
+    expect(p.outbox.ops.map((o) => o.kind), ['place.save', 'place.publish', 'place.verify']);
+  });
+
+  test('lines of routes you cannot see (a private one of someone else) are hidden on a section', () {
+    final p = SharedPlaces(
+      bundled: const [
+        Place(id: 'b', kind: PlaceKind.boulder, name: 'Lúčka'),
+        Place(id: 'seen', parentId: 'b', kind: PlaceKind.problem, name: 'A'),
+      ],
+      cacheFile: _Box(),
+    );
+    p.topos.merge([
+      CloudTopo(
+        topo: const Topo(
+          id: 't',
+          placeId: 'b',
+          photoPath: 'x.jpg',
+          lines: [
+            TopoLine(problemId: 'seen', points: [TopoPoint(0, 0), TopoPoint(1, 1)]),
+            TopoLine(problemId: 'hidden', points: [TopoPoint(0, 1), TopoPoint(1, 0)]),
+          ],
+        ),
+        updatedAt: DateTime.utc(2026, 11, 21),
+      ),
+    ]);
+    expect(CloudPlaceEditor(p).toposOf('b').single.lines.map((l) => l.problemId), ['seen']);
+
+    // another angle of the section (#469): not a section of its own
+    p.topos.merge([
+      CloudTopo(
+        topo: const Topo(id: 'a', placeId: 'b', photoPath: 'y.jpg', angleOf: 't'),
+        updatedAt: DateTime.utc(2026, 11, 21, 1),
+      ),
+    ]);
+    final e = CloudPlaceEditor(p);
+    expect(e.toposOf('b').map((t) => t.id), ['t']);
+    expect(e.anglesOf(e.toposOf('b').single).map((t) => t.id), ['a']);
   });
 
   test('Wi-Fi only: nothing is sent on mobile data', () async {

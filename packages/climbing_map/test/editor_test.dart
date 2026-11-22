@@ -43,6 +43,19 @@ class _Editor extends PlaceEditor {
 
   @override
   Future<void> forgetOffline(String placeId) async => kept.remove(placeId);
+  final published = <String>[];
+  final checks = <String, bool>{};
+  @override
+  Future<String?> publish(Place p) async {
+    published.add(p.id);
+    return null;
+  }
+
+  @override
+  Future<String?> setVerified(Place p, bool verified) async {
+    checks[p.id] = verified;
+    return null;
+  }
   final ascents = <Ascent>[];
   final opinions = <String, Opinion>{};
   final comments = <RouteComment>[];
@@ -111,7 +124,12 @@ class _Editor extends PlaceEditor {
   @override
   List<Topo> toposOf(String placeId) => [
     for (final t in topos)
-      if (t.placeId == placeId) t,
+      if (t.placeId == placeId && t.angleOf == null) t,
+  ];
+  @override
+  List<Topo> anglesOf(Topo section) => [
+    for (final t in topos)
+      if (t.angleOf == section.id) t,
   ];
   @override
   ImageProvider photoOf(Topo t, {bool original = false}) => MemoryImage(_png);
@@ -263,6 +281,7 @@ void main() {
     expect((p.kind, p.parentId, p.grade, p.isRope, p.sitStart, p.sitHeight), (PlaceKind.problem, 'b', '3+/4-', true, true, 'low'));
     expect(p.number, '1');
     expect(p.note, '');
+    expect(p.draft, isTrue, reason: 'new routes start private (#462)');
   });
 
   testWidgets('press and slide on the photo: a magnifier follows, the hold lands where you let go', (t) async {
@@ -533,6 +552,50 @@ void main() {
       expect(find.text('Boulders 3'), findsOneWidget, reason: 'the section screen opened');
     });
 
+    testWidgets('another angle: add a photo, redraw with the first photo in view, switch between them', (t) async {
+      final e = await open(t);
+      expect(find.text('Photo 1'), findsNothing, reason: 'one photo: no switcher yet');
+      await t.tap(find.text('Another angle'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('From gallery'));
+      await t.pumpAndSettle();
+      expect(find.text('Another angle · Hradná skala'), findsOneWidget);
+      expect(find.text('The other photo'), findsOneWidget);
+      // the routes on the first photo come first when picking what to draw
+      await t.tap(find.text('Routes'));
+      await t.pumpAndSettle();
+      expect(find.textContaining('Put the holds you see on the other photo'), findsOneWidget);
+      await t.tap(find.text('Save'));
+      await t.pumpAndSettle();
+      final angle = e.topos.singleWhere((x) => x.angleOf == 't1');
+      expect((angle.placeId, angle.name, angle.createdBy), ('b', 'lucka 01', 'u1'));
+      expect(e.toposOf('b').map((x) => x.id), ['t1'], reason: 'an angle is not a section of its own');
+      // back on the section: both photos, the new one shown
+      expect(find.text('Photo 1'), findsOneWidget);
+      expect(t.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Photo 2')).selected, isTrue);
+      expect(find.text('7 zverokruh'), findsNothing, reason: 'nothing drawn on the new photo yet');
+      await t.tap(find.text('Photo 1'));
+      await t.pumpAndSettle();
+      expect(find.text('7 zverokruh'), findsOneWidget);
+    });
+
+    testWidgets('on a wide screen (desktop browser) the editor puts the photo left and the tools right', (t) async {
+      final e = await open(t, admin: true);
+      await t.binding.setSurfaceSize(const Size(1280, 800));
+      await t.tap(find.byTooltip('Edit section'));
+      await t.pumpAndSettle();
+      final photo = t.getRect(find.descendant(of: find.byType(TopoEditorScreen), matching: find.byType(TopoCanvas)));
+      final tools = t.getRect(find.text('Holds'));
+      expect(photo.right, lessThanOrEqualTo(tools.left), reason: 'side by side');
+      expect(photo.height, greaterThan(600), reason: 'the photo gets the full height');
+      expect(find.text('Section name'), findsOneWidget);
+      await t.tap(find.text('Routes'));
+      await t.pumpAndSettle();
+      expect(find.text('Draw a route'), findsOneWidget);
+      await t.binding.setSurfaceSize(null);
+      e.isAdmin = false;
+    });
+
     testWidgets('tapping a letter shows only the routes through it', (t) async {
       await open(t);
       final r = t.getRect(_topoPaint);
@@ -545,6 +608,52 @@ void main() {
       await t.tap(find.text('Routes through Q: 2'));
       await t.pumpAndSettle();
       expect(find.text('7 zverokruh'), findsOneWidget);
+    });
+
+    Future<_Editor> openRoute(WidgetTester t, Place route, {bool mine = false, bool editor = false}) async {
+      await t.binding.setSurfaceSize(const Size(420, 900));
+      final e = _Editor([for (final p in places) p.id == route.id ? route : p]);
+      if (mine) e.saved.add(route);
+      if (editor) e.scoped.add(route.id);
+      final tree = PlaceTree(e.places);
+      await t.pumpWidget(
+        MaterialApp(
+          key: UniqueKey(),
+          home: RouteScreen(tree: tree, boulder: tree['b']!, problem: route, editor: e, topo: topo),
+        ),
+      );
+      await t.pumpAndSettle();
+      return e;
+    }
+
+    testWidgets('your private route: a lock, only you see it, publish it', (t) async {
+      final draft = places.firstWhere((p) => p.id == 'p8').copyWith(draft: true, verified: false);
+      final e = await openRoute(t, draft, mine: true);
+      expect(find.byIcon(Icons.lock_outline), findsWidgets);
+      expect(find.text('Private'), findsOneWidget);
+      await t.tap(find.text('Publish'));
+      await t.pumpAndSettle();
+      expect(e.published, ['p8']);
+      expect(find.text('Unverified'), findsOneWidget, reason: 'published, not checked yet');
+      expect(find.text('Verify'), findsNothing, reason: 'making a route is not enough to verify it');
+    });
+
+    testWidgets('an unverified route: a place editor verifies it; others only see why it lacks the check mark', (t) async {
+      final route = places.firstWhere((p) => p.id == 'p7').copyWith(verified: false);
+      var e = await openRoute(t, route);
+      expect(find.text('Unverified'), findsOneWidget);
+      expect(find.text('Verify'), findsNothing);
+      expect(find.byIcon(Icons.verified), findsNothing);
+      e = await openRoute(t, route, editor: true);
+      await t.tap(find.text('Verify'));
+      await t.pumpAndSettle();
+      expect(e.checks, {'p7': true});
+      expect(find.byIcon(Icons.verified), findsWidgets);
+      expect(find.byTooltip('Remove check mark'), findsOneWidget);
+      await t.tap(find.byTooltip('Remove check mark'));
+      await t.pumpAndSettle();
+      expect(e.checks, {'p7': false});
+      expect(find.text('Unverified'), findsOneWidget);
     });
 
     testWidgets('a route: its page, log an ascent, admins edit anyone\'s', (t) async {
@@ -564,9 +673,11 @@ void main() {
       expect(e.opinions['u1']!.grade, '8A+');
       expect(find.text('Hard'), findsOneWidget);
       expect(find.text('Feels like 8A+'), findsOneWidget);
+      expect(find.text('Community grade 8A+ · 1 vote · proposed 8A'), findsOneWidget, reason: '(8A + 8A+) / 2 rounds up (#468)');
       await t.tap(find.byTooltip('4 stars'));
       await t.pumpAndSettle();
       expect(e.opinions['u1']!.stars, 4);
+      await t.scrollUntilVisible(find.text('★ 4.0 · 1 rating'), 100, scrollable: find.byType(Scrollable).at(1));
       expect(find.text('★ 4.0 · 1 rating'), findsOneWidget);
       await t.scrollUntilVisible(find.text('Crimps'), 200, scrollable: find.byType(Scrollable).at(1));
       await t.tap(find.text('Crimps'));

@@ -383,6 +383,15 @@ class ClimbSession {
 
   String? get topGrade => topLevel?.grade;
 
+  /// The session's own average: its graded sends' points over how many there
+  /// were, not over ten. One 7A+ send is a 7A+ day. The calendar shows this (#486);
+  /// the top 10 average stays for the level.
+  ClimbLevel? get dayLevel {
+    final sends = climbs.where((c) => c.outcome.isSend && c.index != null).length;
+    if (sends == 0) return null;
+    return ClimbLevel(topTenAverageIndex(climbs, top: sends)!, sends, sends);
+  }
+
   /// Share of the climbs that were flashed / repeats, 0–1 (TopLogger's session stats).
   double get flashShare => climbs.isEmpty ? 0 : flashes / climbs.length;
   double get repeatShare => climbs.isEmpty ? 0 : climbs.where((c) => c.repeat).length / climbs.length;

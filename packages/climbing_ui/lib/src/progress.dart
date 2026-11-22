@@ -169,12 +169,12 @@ class _WhereChips extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(24),
-                color: on ? _pink.withValues(alpha: 0.14) : null,
-                border: Border.all(color: on ? _pink : look.muted, width: 1.5),
+                color: on ? look.send.withValues(alpha: 0.14) : null,
+                border: Border.all(color: on ? look.send : look.muted, width: 1.5),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                if (icon != null) ...[Icon(icon, size: 16, color: on ? _pink : look.ink), const SizedBox(width: 6)],
-                Text(label, style: look.text(15, bold: on, color: on ? _pink : look.ink)),
+                if (icon != null) ...[Icon(icon, size: 16, color: on ? look.send : look.ink), const SizedBox(width: 6)],
+                Text(label, style: look.text(15, bold: on, color: on ? look.send : look.ink)),
               ]),
             ),
           ),
@@ -218,10 +218,10 @@ class _PeriodChips extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(24),
-                color: p == period ? _pink.withValues(alpha: 0.14) : null,
-                border: Border.all(color: p == period ? _pink : look.muted, width: 1.5),
+                color: p == period ? look.send.withValues(alpha: 0.14) : null,
+                border: Border.all(color: p == period ? look.send : look.muted, width: 1.5),
               ),
-              child: Text(p.label, style: look.text(15, bold: p == period, color: p == period ? _pink : look.ink)),
+              child: Text(p.label, style: look.text(15, bold: p == period, color: p == period ? look.send : look.ink)),
             ),
           ),
         ),
@@ -284,7 +284,7 @@ class _LevelHeader extends StatelessWidget {
                       value: l.fraction,
                       minHeight: 8,
                       backgroundColor: look.line,
-                      color: _pink,
+                      color: look.send,
                       semanticsLabel: 'Progress to ${l.next}',
                     ),
                   ),
@@ -380,8 +380,8 @@ class _PyramidState extends State<_Pyramid> {
                           final tw = wk == 0 ? fw : (pill + (box.maxWidth - pill) * (f + wk) / most).clamp(fw + pill, box.maxWidth).toDouble();
                           return Stack(
                             children: [
-                              if (wk > 0) _bar(tw, _pink, '${f + wk}', look),
-                              if (f > 0) _bar(fw, _wine, '$f', look, bolt: true),
+                              if (wk > 0) _bar(tw, look.send, '${f + wk}', look),
+                              if (f > 0) _bar(fw, look.sendDeep, '$f', look, bolt: true),
                             ],
                           );
                         }),
@@ -631,8 +631,8 @@ class _GradeHistoryState extends State<_GradeHistory> {
       children: [
         Text('Boulder grade history', style: look.text(24, bold: true)),
         Wrap(spacing: 16, children: [
-          box('Top', top, _pink, (v) => setState(() => top = v)),
-          box('Flash', flash, _wine, (v) => setState(() => flash = v), bolt: true),
+          box('Top', top, look.send, (v) => setState(() => top = v)),
+          box('Flash', flash, look.sendDeep, (v) => setState(() => flash = v), bolt: true),
         ]),
         const SizedBox(height: 8),
         if (known.length < 2)
@@ -740,8 +740,8 @@ class _HistoryPainter extends CustomPainter {
       );
     }
 
-    if (top != null) series(top!, _pink);
-    if (flash != null) series(flash!, _wine);
+    if (top != null) series(top!, look.send);
+    if (flash != null) series(flash!, look.sendDeep);
   }
 
   @override

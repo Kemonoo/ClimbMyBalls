@@ -27,6 +27,10 @@ void main() {
     expect(back.lines[1].color, '#f2c94c');
     expect(back.marks.map((m) => m.label), ['A', 'B']);
     expect(back.createdBy, 'u1');
+    expect(back.angleOf, isNull);
+    expect(topo.toRow().containsKey('angle_of'), isFalse, reason: 'sections work on a database without 009');
+    final angle = Topo.fromRow({...topo.toRow(), 'id': 'a2', 'angle_of': topo.id});
+    expect((angle.angleOf, angle.copyWith(name: 'x').angleOf, angle.toRow()['angle_of']), (topo.id, topo.id, topo.id));
   });
 
   test('tapping finds the nearest line within reach, on the real photo shape', () {

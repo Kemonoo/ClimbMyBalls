@@ -150,6 +150,13 @@ class Place {
   /// stand-up version of).
   final Map<String, Object?> details;
 
+  /// A route only its maker sees until they publish it (#462).
+  final bool draft;
+
+  /// The check mark (#467): a place editor checked it, or 3 people topped
+  /// it. Places that never had the question (bundled, OSM) count as verified.
+  final bool verified;
+
   bool get sitStart => details['sit'] == true;
   String get note => details['note'] as String? ?? '';
   bool get gradeUncertain => details['uncertain'] == true;
@@ -179,6 +186,8 @@ class Place {
     this.source = 'manual',
     this.licence = 'ODbL',
     this.details = const {},
+    this.draft = false,
+    this.verified = true,
   });
 
   Place copyWith({
@@ -189,6 +198,8 @@ class Place {
     bool? indoor,
     String? grade,
     Map<String, Object?>? details,
+    bool? draft,
+    bool? verified,
   }) => Place(
     id: id,
     parentId: parentId ?? this.parentId,
@@ -201,6 +212,8 @@ class Place {
     source: source,
     licence: licence,
     details: details ?? this.details,
+    draft: draft ?? this.draft,
+    verified: verified ?? this.verified,
   );
 
   Map<String, dynamic> toJson() => {
@@ -215,6 +228,8 @@ class Place {
     'source': source,
     'licence': licence,
     if (details.isNotEmpty) 'details': details,
+    if (draft) 'draft': true,
+    if (!verified) 'verified': false,
   };
 
   factory Place.fromJson(Map<String, dynamic> j) => Place(
@@ -229,6 +244,8 @@ class Place {
     source: j['source'] as String? ?? 'manual',
     licence: j['licence'] as String? ?? 'ODbL',
     details: (j['details'] as Map?)?.cast<String, Object?>() ?? const {},
+    draft: j['draft'] == true,
+    verified: j['verified'] != false,
   );
 
   @override

@@ -46,9 +46,6 @@ String _fmtMinutes(int m) => m >= 60 ? '${m ~/ 60}h ${(m % 60).toString().padLef
 
 String _plural(int n, String one, [String? many]) => '$n ${n == 1 ? one : many ?? '${one}s'}';
 
-// TopLogger's look: magenta for sends, a deep wine for the flashed part.
-const _pink = Color(0xFFFF0A8C);
-const _wine = Color(0xFF9A0B5E);
 
 String _ddmmyy(DateTime t) =>
     '${t.day.toString().padLeft(2, '0')}/${t.month.toString().padLeft(2, '0')}/${(t.year % 100).toString().padLeft(2, '0')}';

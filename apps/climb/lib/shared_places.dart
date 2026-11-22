@@ -290,6 +290,10 @@ class SharedPlaces extends ChangeNotifier {
         await c.savePlace(CloudPlace.fromRow({...d, 'updated_at': DateTime.now().toUtc().toIso8601String()}).place);
       case 'place.delete':
         await c.deletePlace(d['id'] as String);
+      case 'place.publish':
+        await c.publishPlace(d['id'] as String, verify: d['verify'] == true);
+      case 'place.verify':
+        await c.verifyPlace(d['id'] as String, d['verified'] == true);
       case 'topo.save':
         final t = Topo.fromRow(d);
         if (d['upload'] == true) {
@@ -313,6 +317,11 @@ class SharedPlaces extends ChangeNotifier {
       case 'place.delete':
         final p = tree[d['id'] as String];
         if (p != null) cache.merge([CloudPlace(place: p, createdBy: me, updatedAt: now, deleted: true)], local: true);
+      case 'place.publish' || 'place.verify':
+        final p = tree[d['id'] as String];
+        if (p == null) return;
+        final changed = kind == 'place.publish' ? p.copyWith(draft: false, verified: d['verify'] == true ? true : null) : p.copyWith(verified: d['verified'] == true);
+        cache.merge([CloudPlace(place: changed, createdBy: cache.createdBy(p.id), createdAt: cache.createdAt(p.id), updatedAt: now)], local: true);
       case 'topo.save':
         topos.merge([CloudTopo(topo: Topo.fromRow(d), updatedAt: now)], local: true);
       case 'topo.delete':
@@ -507,7 +516,21 @@ class CloudPlaceEditor extends PlaceEditor {
   String newId() => newPlaceId();
 
   @override
-  Future<String?> save(Place p) => _change('place.save', placeToRow(p));
+  Future<String?> save(Place p) async {
+    final old = places.tree[p.id];
+    // a new place starts unverified unless an editor publishes it at once;
+    // a change keeps what it was (only [setVerified] changes it)
+    final verify = old == null && !p.draft && p.kind == PlaceKind.problem && mayVerify(this, p.parentId ?? p.id);
+    final err = await _change('place.save', {...placeToRow(p), 'verified': old?.verified ?? (verify || p.kind != PlaceKind.problem)});
+    if (err != null || !verify) return err;
+    return _change('place.verify', {'id': p.id, 'verified': true});
+  }
+
+  @override
+  Future<String?> publish(Place p) => _change('place.publish', {'id': p.id, 'verify': mayVerify(this, p.id)});
+
+  @override
+  Future<String?> setVerified(Place p, bool verified) => _change('place.verify', {'id': p.id, 'verified': verified});
 
   @override
   Future<String?> delete(Place p) => _change('place.delete', {'id': p.id});
@@ -517,7 +540,22 @@ class CloudPlaceEditor extends PlaceEditor {
   @override
   List<Topo> toposOf(String placeId) {
     int n(Topo t) => int.tryParse(RegExp(r'\d+$').stringMatch(t.name.trim()) ?? '') ?? 1 << 20;
-    return places.topos.of(placeId)..sort((a, b) => n(a) != n(b) ? n(a).compareTo(n(b)) : a.name.compareTo(b.name));
+    return [
+      for (final t in places.topos.of(placeId))
+        if (t.angleOf == null) _visible(t),
+    ]..sort((a, b) => n(a) != n(b) ? n(a).compareTo(n(b)) : a.name.compareTo(b.name));
+  }
+
+  @override
+  List<Topo> anglesOf(Topo section) => [
+    for (final t in places.topos.of(section.placeId))
+      if (t.angleOf == section.id) _visible(t),
+  ];
+
+  /// Lines of routes you can't see (someone's private route, #462) hidden.
+  Topo _visible(Topo t) {
+    final tree = places.tree;
+    return t.lines.every((l) => tree[l.problemId] != null) ? t : t.copyWith(lines: [for (final l in t.lines) if (tree[l.problemId] != null) l]);
   }
 
   @override
@@ -645,14 +683,14 @@ class CloudPlaceEditor extends PlaceEditor {
   }
 
   @override
-  List<String> get guides => isAdmin && places.hasGuide ? const ['Devín'] : const [];
+  List<String> get guides => isAdmin && places.hasGuide ? kGuides.keys.toList() : const [];
 
   /// Adds a bundled guide to [boulder]: its routes as problems, its pages as
   /// sections (the cleaned photo with our lines, the guide's page as the
   /// second photo). A route on several pages is one problem.
   @override
   Future<String?> importGuide(String guide, Place boulder) => _run(() async {
-    const dir = 'assets/guides/devin';
+    final dir = kGuides[guide] ?? kGuides.values.first;
     final g = jsonDecode(await rootBundle.loadString('$dir/guide.json')) as Map<String, dynamic>;
     final source = g['source'] as String? ?? guide;
     // run again after a failure: reuse the routes and sections already added
@@ -702,13 +740,15 @@ class CloudPlaceEditor extends PlaceEditor {
       }
       final id = newTopoId();
       final photo = (await rootBundle.load('$dir/${s['photo']}')).buffer.asUint8List();
-      final original = (await rootBundle.load('$dir/${s['original']}')).buffer.asUint8List();
+      // a guide page of its own when the photo is a cleaned one; none when
+      // the photo is the guide's (Vyhliadka)
+      final original = s['original'] == null ? null : (await rootBundle.load('$dir/${s['original']}')).buffer.asUint8List();
       final topo = Topo(
         id: id,
         placeId: boulder.id,
         name: s['name'] as String,
         photoPath: await _cloud.uploadPhoto(id, photo),
-        originalPath: await _cloud.uploadPhoto('$id-guide', original),
+        originalPath: original == null ? '' : await _cloud.uploadPhoto('$id-guide', original),
         width: s['width'] as int,
         height: s['height'] as int,
         marks: marks,
@@ -737,6 +777,10 @@ class CloudPlaceEditor extends PlaceEditor {
     return places.problem;
   }
 }
+
+/// The guides bundled with the app, by name: where each one's guide.json and
+/// photos are. Devín's crag (lúčka, jaskynka) and its Vyhliadka boulder (#465).
+const kGuides = {'Devín': 'assets/guides/devin', 'Vyhliadka': 'assets/guides/vyhliadka'};
 
 /// Today, where the day starts at 04:00 (a late session still counts for
 /// the evening it began).

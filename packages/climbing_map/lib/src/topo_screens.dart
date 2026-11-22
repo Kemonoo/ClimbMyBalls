@@ -90,7 +90,69 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
 
   List<Topo> get _sections {
     final all = widget.editor.toposOf(widget.boulder.id);
-    return all.any((t) => t.id == _topo.id) ? all : [_topo, ...all];
+    return all.any((t) => t.id == _sectionId) ? all : [if (_topo.angleOf == null) _topo, ...all];
+  }
+
+  /// The section shown, also while one of its other angles is (#469).
+  String get _sectionId => _topo.angleOf ?? _topo.id;
+  Topo get _section => _topo.angleOf == null ? _topo : _sections.where((t) => t.id == _sectionId).firstOrNull ?? _topo;
+
+  /// The section's photo and its other angles, the one shown as it is now.
+  List<Topo> get _photos {
+    final s = _section;
+    final angles = widget.editor.anglesOf(s);
+    return [
+      s,
+      for (final a in angles) a.id == _topo.id ? _topo : a,
+      if (_topo.angleOf == s.id && !angles.any((a) => a.id == _topo.id)) _topo,
+    ];
+  }
+
+  void _show(Topo t) => setState(() {
+    _topo = t;
+    _open = _mark = null;
+    _original = false;
+  });
+
+  /// A photo of this section from another side: then redraw its routes on
+  /// it, seeing them on this photo.
+  Future<void> _addAngle() async {
+    if (!widget.editor.signedIn) return;
+    final camera = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('Another angle of this section'), subtitle: Text('Then draw its routes on the new photo; this one stays in view.')),
+            ListTile(leading: const Icon(Icons.photo_camera_outlined), title: const Text('Take a photo'), onTap: () => Navigator.pop(context, true)),
+            ListTile(leading: const Icon(Icons.photo_library_outlined), title: const Text('From gallery'), onTap: () => Navigator.pop(context, false)),
+          ],
+        ),
+      ),
+    );
+    if (camera == null || !mounted) return;
+    final photo = await widget.editor.pickPhoto(camera: camera);
+    if (photo == null || !mounted) return;
+    final s = _section, from = _topo;
+    final t = Topo(
+      id: newTopoId(),
+      placeId: s.placeId,
+      photoPath: '',
+      name: s.name,
+      width: photo.width,
+      height: photo.height,
+      createdBy: widget.editor.me,
+      angleOf: s.id,
+    );
+    final saved = await Navigator.of(context).push<Topo>(
+      MaterialPageRoute(
+        builder: (_) => TopoEditorScreen(tree: _tree, boulder: widget.boulder, topo: t, editor: widget.editor, newPhoto: photo, reference: from),
+      ),
+    );
+    if (saved == null || !mounted) return;
+    _show(widget.editor.anglesOf(s).where((a) => a.id == saved.id).firstOrNull ?? saved);
   }
 
   String _sectionTitle(Topo t, int i) => t.name.isNotEmpty ? t.name : 'Section ${i + 1}';
@@ -136,7 +198,13 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
   Future<void> _edit() async {
     final t = await Navigator.of(context).push<Topo>(
       MaterialPageRoute(
-        builder: (_) => TopoEditorScreen(tree: _tree, boulder: widget.boulder, topo: _topo, editor: widget.editor),
+        builder: (_) => TopoEditorScreen(
+          tree: _tree,
+          boulder: widget.boulder,
+          topo: _topo,
+          editor: widget.editor,
+          reference: _topo.angleOf == null ? null : _section,
+        ),
       ),
     );
     if (t != null && mounted) setState(() => _topo = t);
@@ -172,7 +240,8 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
     final cs = Theme.of(context).colorScheme;
     final numbers = problemNumbers(_tree, widget.boulder.id);
     final sections = _sections;
-    final index = math.max(0, sections.indexWhere((t) => t.id == _topo.id));
+    final index = math.max(0, sections.indexWhere((t) => t.id == _sectionId));
+    final photos = _photos;
     final boulders = _routes(false), rope = _routes(true);
     final openLine = _open == null ? null : _topo.lines.indexWhere((l) => l.problemId == _open);
     final lit = _mark != null ? _topo.linesThrough(_mark!) : {if (openLine != null && openLine >= 0) openLine};
@@ -209,11 +278,7 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
         titleSpacing: 0,
         title: PopupMenuButton<int>(
           tooltip: 'Sections',
-          onSelected: (i) => setState(() {
-            _topo = sections[i];
-            _open = _mark = null;
-            _original = false;
-          }),
+          onSelected: (i) => _show(sections[i]),
           itemBuilder: (_) => [
             for (var i = 0; i < sections.length; i++) CheckedPopupMenuItem(value: i, checked: i == index, child: Text(_sectionTitle(sections[i], i))),
           ],
@@ -225,7 +290,7 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(_sectionTitle(_topo, index), style: text.titleMedium, overflow: TextOverflow.ellipsis),
+                    Text(_sectionTitle(_section, index), style: text.titleMedium, overflow: TextOverflow.ellipsis),
                     Text(
                       [
                         widget.boulder.name,
@@ -282,6 +347,34 @@ class _TopoScreenState extends State<TopoScreen> with SingleTickerProviderStateM
               ),
             ),
           ),
+          if (photos.length > 1 || widget.editor.signedIn)
+            SizedBox(
+              height: 44,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                children: [
+                  if (photos.length > 1)
+                    for (var i = 0; i < photos.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          visualDensity: VisualDensity.compact,
+                          label: Text('Photo ${i + 1}', maxLines: 1, softWrap: false),
+                          selected: photos[i].id == _topo.id,
+                          onSelected: (_) => _show(photos[i]),
+                        ),
+                      ),
+                  if (widget.editor.signedIn)
+                    ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(Icons.add_a_photo_outlined, size: 18),
+                      label: const Text('Another angle', maxLines: 1, softWrap: false),
+                      onPressed: _addAngle,
+                    ),
+                ],
+              ),
+            ),
           if (_mark != null)
             Material(
               color: cs.secondaryContainer,
@@ -356,14 +449,23 @@ class _RouteRow extends StatelessWidget {
                   SizedBox(
                     width: 64,
                     child: Text(
-                      '${p.grade}${p.gradeUncertain ? '?' : ''}',
+                      switch (summary?.grade) {
+                        final g? when g.isNotEmpty => g,
+                        _ => '${p.grade}${p.gradeUncertain ? '?' : ''}',
+                      },
                       textAlign: TextAlign.center,
                       style: text.titleSmall?.copyWith(fontWeight: FontWeight.w800),
                     ),
                   ),
-                  Expanded(
+                  Flexible(
                     child: Text(displayName(p, number), maxLines: 1, overflow: TextOverflow.ellipsis, style: text.bodyLarge),
                   ),
+                  if (p.draft || p.verified)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: RouteStatusIcon(p, size: 16),
+                    ),
+                  const Spacer(),
                   if (start.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(left: 6),
@@ -449,8 +551,9 @@ class _RouteScreenState extends State<RouteScreen> {
   final _comment = TextEditingController();
 
   List<Topo> get _onTopos => [
-    for (final t in widget.editor.toposOf(widget.boulder.id))
-      if (t.lines.any((l) => l.problemId == widget.problem.id)) t,
+    for (final s in widget.editor.toposOf(widget.boulder.id))
+      for (final t in [s, ...widget.editor.anglesOf(s)])
+        if (t.lines.any((l) => l.problemId == widget.problem.id)) t,
   ];
 
   @override
@@ -538,6 +641,71 @@ class _RouteScreenState extends State<RouteScreen> {
     await _load();
   }
 
+  /// Private, unverified or verified, and the button that moves it on
+  /// (#462, #467). Null for a verified route.
+  Widget? _status(BuildContext context) {
+    final p = _p, e = widget.editor;
+    final maker = e.me != null && e.createdBy(p.id) == e.me;
+    final editor = mayVerify(e, p.id);
+    final (IconData icon, String title, String body, String? action, Future<String?> Function()? go, Place next) = switch (p) {
+      Place(draft: true) => (
+        Icons.lock_outline,
+        'Private',
+        'Only you see this route. Publish it when it is ready${editor ? '; as a place editor yours is verified at once' : ''}.',
+        maker ? 'Publish' : null,
+        () => e.publish(p),
+        p.copyWith(draft: false, verified: editor ? true : null),
+      ),
+      Place(verified: false) => (
+        Icons.help_outline,
+        'Unverified',
+        'Nobody has checked this route yet. It gets the check mark when a place editor verifies it or 3 people top it.',
+        editor ? 'Verify' : null,
+        () => e.setVerified(p, true),
+        p.copyWith(verified: true),
+      ),
+      _ => (Icons.verified, '', '', null, null, p),
+    };
+    if (title.isEmpty) return null;
+    final text = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 20),
+                  const SizedBox(width: 8),
+                  Text(title, style: text.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(body, style: text.bodySmall),
+              if (action != null && go != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () async {
+                      final err = await go();
+                      if (!mounted) return;
+                      if (err != null) return _say(err);
+                      setState(() => _p = next);
+                    },
+                    child: Text(action, maxLines: 1, softWrap: false),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _edit() async {
     final p = await showNewProblemSheet(context, widget.boulder, _p.id, existing: _p, tree: widget.tree);
     if (p == null || !mounted) return;
@@ -598,7 +766,7 @@ class _RouteScreenState extends State<RouteScreen> {
                   padding: const EdgeInsets.all(3),
                   child: FittedBox(
                     child: Text(
-                      p.grade,
+                      averageGrade(p.grade, p.isRope ? GradeSystem.uiaa : GradeSystem.font, [for (final o in _opinions) o.grade]) ?? p.grade,
                       maxLines: 1,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
                     ),
@@ -606,10 +774,22 @@ class _RouteScreenState extends State<RouteScreen> {
                 ),
               ),
               const SizedBox(width: 10),
-              Expanded(child: Text(displayName(p, numbers[p.id]), overflow: TextOverflow.ellipsis)),
+              Flexible(child: Text(displayName(p, numbers[p.id]), overflow: TextOverflow.ellipsis)),
+              if (p.draft || p.verified) Padding(padding: const EdgeInsets.only(left: 6), child: RouteStatusIcon(p, size: 20)),
             ],
           ),
           actions: [
+            if (!p.draft && p.verified && mayVerify(widget.editor, p.id))
+              IconButton(
+                tooltip: 'Remove check mark',
+                icon: const Icon(Icons.remove_done),
+                onPressed: () async {
+                  final err = await widget.editor.setVerified(p, false);
+                  if (!mounted) return;
+                  if (err != null) return _say(err);
+                  setState(() => _p = p.copyWith(verified: false));
+                },
+              ),
             if (canEdit(widget.editor, p.id)) ...[
               IconButton(tooltip: 'Edit route', onPressed: _edit, icon: const Icon(Icons.edit_outlined)),
               IconButton(tooltip: 'Delete route', onPressed: _delete, icon: const Icon(Icons.delete_outline)),
@@ -646,10 +826,12 @@ class _RouteScreenState extends State<RouteScreen> {
     final p = _p;
     final scale = p.isRope ? GradeSystem.uiaa : GradeSystem.font;
     final mine = _mine;
-    final chart = gradeVotes(p.grade, scale, [
+    final votes = [
       for (final o in _opinions)
         if (o.grade.isNotEmpty) o.grade,
-    ]);
+    ];
+    final chart = gradeVotes(p.grade, scale, votes);
+    final community = averageGrade(p.grade, scale, votes);
     final rated = [
       for (final o in _opinions)
         if (o.stars > 0) o,
@@ -668,8 +850,14 @@ class _RouteScreenState extends State<RouteScreen> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
       children: [
         if (_error != null) Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        ?_status(context),
         if (chart != null) ...[
           Text('Grade votes', style: text.titleSmall),
+          if (community != null)
+            Text(
+              'Community grade $community · ${votes.length} ${votes.length == 1 ? 'vote' : 'votes'} · proposed ${p.grade}',
+              style: text.bodySmall,
+            ),
           const SizedBox(height: 8),
           _VoteChart(chart: chart, mine: mine == null ? null : gradeStep(mine.grade, scale), scale: scale),
           const SizedBox(height: 18),
@@ -1163,11 +1351,15 @@ enum _Tool { holds, routes, bend }
 /// stretches between holds; a stretch can be bent by dragging it. Returns
 /// the saved topo.
 class TopoEditorScreen extends StatefulWidget {
-  const TopoEditorScreen({super.key, required this.tree, required this.boulder, required this.topo, required this.editor, this.newPhoto});
+  const TopoEditorScreen({super.key, required this.tree, required this.boulder, required this.topo, required this.editor, this.newPhoto, this.reference});
   final PlaceTree tree;
   final Place boulder;
   final Topo topo;
   final PlaceEditor editor;
+
+  /// Another photo of the same rock, shown small above this one so its
+  /// routes can be redrawn here (#469); the route being drawn lights up.
+  final Topo? reference;
 
   /// The photo, when the topo is new and not uploaded yet.
   final TopoPhoto? newPhoto;
@@ -1227,6 +1419,13 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
 
   Future<void> _pickProblem() async {
     final drawn = {for (final l in _topo.lines) l.problemId};
+    final there = {for (final l in widget.reference?.lines ?? const <TopoLine>[]) l.problemId};
+    final problems = [
+      for (final p in _problems)
+        if (there.contains(p.id) && !drawn.contains(p.id)) p,
+      for (final p in _problems)
+        if (!there.contains(p.id) || drawn.contains(p.id)) p,
+    ];
     final numbers = problemNumbers(_tree, widget.boulder.id);
     final picked = await showModalBottomSheet<String>(
       context: context,
@@ -1235,10 +1434,16 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
         shrinkWrap: true,
         children: [
           ListTile(leading: const Icon(Icons.add), title: const Text('New problem'), onTap: () => Navigator.pop(context, '')),
-          for (final p in _problems)
+          for (final p in problems)
             ListTile(
               title: Text(displayName(p, numbers[p.id])),
-              subtitle: Text(drawn.contains(p.id) ? '${problemGradeLabel(p)} · drawn here, tap to redraw' : problemGradeLabel(p)),
+              subtitle: Text(
+                drawn.contains(p.id)
+                    ? '${problemGradeLabel(p)} · drawn here, tap to redraw'
+                    : there.contains(p.id)
+                    ? '${problemGradeLabel(p)} · on the other photo'
+                    : problemGradeLabel(p),
+              ),
               onTap: () => Navigator.pop(context, p.id),
             ),
         ],
@@ -1413,6 +1618,41 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
     _seq = [];
   });
 
+  /// The other photo, small: the route being drawn lit up on it.
+  Widget _referencePanel(Topo ref, Map<String, String> numbers, {double height = 150}) {
+    final i = _problem == null ? -1 : ref.lines.indexWhere((l) => l.problemId == _problem);
+    return SizedBox(
+      height: height,
+      child: ColoredBox(
+        color: Colors.black,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: TopoCanvas(
+                key: ValueKey('ref${ref.id}'),
+                topo: ref,
+                photo: widget.editor.photoOf(ref),
+                only: i >= 0 ? i : null,
+                numbers: numbers,
+              ),
+            ),
+            Positioned(
+              left: 6,
+              top: 6,
+              child: DecoratedBox(
+                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  child: Text('The other photo', style: TextStyle(color: Colors.white, fontSize: 11)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _save() async {
     if (_problem != null && _seq.length >= 2) _finishRoute();
     setState(() => _saving = true);
@@ -1458,7 +1698,9 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
         'Tap the photo to put ${_topo.nextLabel()} there, or press and slide to place it under the magnifier. Drag a hold to move it, tap it to rename or delete it.',
       _Tool.routes when _problem == null =>
         holds < 2
-            ? 'Put at least two holds down with the Holds tool first.'
+            ? widget.reference != null
+                  ? 'Put the holds you see on the other photo down here first, with the Holds tool.'
+                  : 'Put at least two holds down with the Holds tool first.'
             : 'Draw a route, then tap its holds in order: start, the holds in between, the end.',
       _Tool.routes => '${drawing == null ? '' : displayName(drawing, numbers[drawing.id])}: ${_seq.isEmpty ? 'tap the start hold' : _seq.join(' → ')}',
       _Tool.bend => 'Drag a line between two holds to bend it; it curves toward your finger. Tap a bent line to straighten it.',
@@ -1466,115 +1708,158 @@ class _TopoEditorScreenState extends State<TopoEditorScreen> {
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 48,
-        title: Text('Section · ${widget.boulder.name}', overflow: TextOverflow.ellipsis),
+        title: Text('${widget.topo.angleOf == null ? 'Section' : 'Another angle'} · ${widget.boulder.name}', overflow: TextOverflow.ellipsis),
         actions: [
           if (widget.newPhoto == null) IconButton(tooltip: 'Delete section', onPressed: _deleteSection, icon: const Icon(Icons.delete_outline)),
           TextButton(onPressed: _saving ? null : _save, child: Text(_saving ? 'Saving…' : 'Save')),
         ],
       ),
-      body: Stack(
-        key: _body,
-        children: [
-          Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: Row(
+      body: LayoutBuilder(
+        builder: (context, box) {
+          final details = Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _name,
+                    decoration: const InputDecoration(labelText: 'Section name', isDense: true, border: OutlineInputBorder()),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                DropdownButton<int?>(
+                  value: _topo.bearing == null ? null : ((_topo.bearing! / 45).round() % 8) * 45,
+                  hint: const Text('Faces'),
+                  items: [
+                    const DropdownMenuItem<int?>(value: null, child: Text('Faces ?')),
+                    for (var b = 0; b < 360; b += 45) DropdownMenuItem<int?>(value: b, child: Text('Faces ${bearingLabel(b)}')),
+                  ],
+                  onChanged: (b) => setState(() => _topo = _topo.copyWith(bearing: () => b)),
+                ),
+              ],
+            ),
+          );
+          final tools = Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<_Tool>(
+                segments: const [
+                  ButtonSegment(value: _Tool.holds, label: Text('Holds', maxLines: 1, softWrap: false), icon: Icon(Icons.radio_button_unchecked)),
+                  ButtonSegment(value: _Tool.routes, label: Text('Routes', maxLines: 1, softWrap: false), icon: Icon(Icons.timeline)),
+                  ButtonSegment(value: _Tool.bend, label: Text('Bend', maxLines: 1, softWrap: false), icon: Icon(Icons.gesture)),
+                ],
+                selected: {_tool},
+                showSelectedIcon: false,
+                onSelectionChanged: (s) => setState(() => _tool = s.first),
+              ),
+            ),
+          );
+          final photo = Listener(
+            onPointerMove: (e) => _fingerAt(e.position),
+            child: ColoredBox(
+              color: Colors.black,
+              child: TopoCanvas(
+                topo: shown,
+                photo: _photo,
+                draft: draftLine,
+                numbers: numbers,
+                onTap: _tap,
+                onDragStart: _tool == _Tool.routes ? null : _dragStart,
+                onDragUpdate: _tool == _Tool.routes ? null : _dragUpdate,
+                onDragEnd: _tool == _Tool.routes ? null : _dragEnd,
+              ),
+            ),
+          );
+          final routeBar = _tool != _Tool.routes
+              ? null
+              : _problem == null
+                ? FilledButton.icon(onPressed: holds < 2 ? null : _pickProblem, icon: const Icon(Icons.add), label: const Text('Draw a route'))
+                : Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _seq.isEmpty ? null : () => setState(() => _seq = _seq.sublist(0, _seq.length - 1)),
+                        child: const Text('Undo'),
+                      ),
+                      FilterChip(
+                        label: Text(_end == TopoEnd.topOut ? 'Ends: top out ↑' : 'Ends: at a hold ○', maxLines: 1, softWrap: false),
+                        selected: _end == TopoEnd.hold,
+                        onSelected: (v) => setState(() => _end = v ? TopoEnd.hold : TopoEnd.topOut),
+                      ),
+                      FilterChip(
+                        label: const Text('Yellow', maxLines: 1, softWrap: false),
+                        selected: _yellow,
+                        onSelected: (v) => setState(() => _yellow = v),
+                      ),
+                      if (hasLine) TextButton(onPressed: _removeRoute, child: const Text('Remove line')),
+                      TextButton(onPressed: () => setState(() => _problem = null), child: const Text('Cancel')),
+                      FilledButton(onPressed: _finishRoute, child: const Text('Done')),
+                    ],
+                  );
+          final reference = widget.reference;
+          if (box.maxWidth >= 900) {
+            // a desktop browser (#470): the photo big on the left, the tools in a column
+            return Stack(
+              key: _body,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _name,
-                        decoration: const InputDecoration(labelText: 'Section name', isDense: true, border: OutlineInputBorder()),
+                      child: Column(
+                        children: [
+                          if (reference != null) ...[_referencePanel(reference, numbers, height: box.maxHeight * 0.3), const SizedBox(height: 3)],
+                          Expanded(child: photo),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    DropdownButton<int?>(
-                      value: _topo.bearing == null ? null : ((_topo.bearing! / 45).round() % 8) * 45,
-                      hint: const Text('Faces'),
-                      items: [
-                        const DropdownMenuItem<int?>(value: null, child: Text('Faces ?')),
-                        for (var b = 0; b < 360; b += 45) DropdownMenuItem<int?>(value: b, child: Text('Faces ${bearingLabel(b)}')),
-                      ],
-                      onChanged: (b) => setState(() => _topo = _topo.copyWith(bearing: () => b)),
+                    SizedBox(
+                      width: 360,
+                      child: ListView(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        children: [
+                          details,
+                          tools,
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                            child: Text(hint, style: Theme.of(context).textTheme.bodyMedium),
+                          ),
+                          if (routeBar != null) Padding(padding: const EdgeInsets.all(8), child: routeBar),
+                        ],
+                      ),
                     ),
                   ],
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<_Tool>(
-                    segments: const [
-                      ButtonSegment(value: _Tool.holds, label: Text('Holds', maxLines: 1, softWrap: false), icon: Icon(Icons.radio_button_unchecked)),
-                      ButtonSegment(value: _Tool.routes, label: Text('Routes', maxLines: 1, softWrap: false), icon: Icon(Icons.timeline)),
-                      ButtonSegment(value: _Tool.bend, label: Text('Bend', maxLines: 1, softWrap: false), icon: Icon(Icons.gesture)),
-                    ],
-                    selected: {_tool},
-                    showSelectedIcon: false,
-                    onSelectionChanged: (s) => setState(() => _tool = s.first),
+                if (_finger != null && (_dragHold != null || _bendEdge != null)) _magnifier(_finger!),
+              ],
+            );
+          }
+          return Stack(
+            key: _body,
+            children: [
+              Column(
+                children: [
+                  details,
+                  tools,
+                  Container(
+                    height: 44, // fixed, so the photo doesn't jump when the hint changes
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(hint, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
                   ),
-                ),
+                  if (reference != null) ...[_referencePanel(reference, numbers), const SizedBox(height: 3)],
+                  Expanded(child: photo),
+                  if (routeBar != null) Padding(padding: const EdgeInsets.all(8), child: routeBar),
+                ],
               ),
-              Container(
-                height: 44, // fixed, so the photo doesn't jump when the hint changes
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(hint, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-              ),
-              Expanded(
-                child: Listener(
-                  onPointerMove: (e) => _fingerAt(e.position),
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: TopoCanvas(
-                      topo: shown,
-                      photo: _photo,
-                      draft: draftLine,
-                      numbers: numbers,
-                      onTap: _tap,
-                      onDragStart: _tool == _Tool.routes ? null : _dragStart,
-                      onDragUpdate: _tool == _Tool.routes ? null : _dragUpdate,
-                      onDragEnd: _tool == _Tool.routes ? null : _dragEnd,
-                    ),
-                  ),
-                ),
-              ),
-              if (_tool == _Tool.routes)
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: _problem == null
-                      ? FilledButton.icon(onPressed: holds < 2 ? null : _pickProblem, icon: const Icon(Icons.add), label: const Text('Draw a route'))
-                      : Wrap(
-                          spacing: 8,
-                          runSpacing: 4,
-                          alignment: WrapAlignment.center,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            OutlinedButton(
-                              onPressed: _seq.isEmpty ? null : () => setState(() => _seq = _seq.sublist(0, _seq.length - 1)),
-                              child: const Text('Undo'),
-                            ),
-                            FilterChip(
-                              label: Text(_end == TopoEnd.topOut ? 'Ends: top out ↑' : 'Ends: at a hold ○', maxLines: 1, softWrap: false),
-                              selected: _end == TopoEnd.hold,
-                              onSelected: (v) => setState(() => _end = v ? TopoEnd.hold : TopoEnd.topOut),
-                            ),
-                            FilterChip(
-                              label: const Text('Yellow', maxLines: 1, softWrap: false),
-                              selected: _yellow,
-                              onSelected: (v) => setState(() => _yellow = v),
-                            ),
-                            if (hasLine) TextButton(onPressed: _removeRoute, child: const Text('Remove line')),
-                            TextButton(onPressed: () => setState(() => _problem = null), child: const Text('Cancel')),
-                            FilledButton(onPressed: _finishRoute, child: const Text('Done')),
-                          ],
-                        ),
-                ),
+              if (_finger != null && (_dragHold != null || _bendEdge != null)) _magnifier(_finger!),
             ],
-          ),
-          if (_finger != null && (_dragHold != null || _bendEdge != null)) _magnifier(_finger!),
-        ],
+          );
+        },
       ),
     );
   }
@@ -1633,4 +1918,23 @@ String newTopoId([math.Random? random]) {
   b[8] = (b[8] & 0x3f) | 0x80;
   final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
   return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
+}
+
+/// A lock on a private route, a check mark on a verified one (#462, #467).
+class RouteStatusIcon extends StatelessWidget {
+  const RouteStatusIcon(this.route, {super.key, this.size = 16});
+  final Place route;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    if (route.draft) {
+      return Tooltip(message: 'Private: only you see it', child: Icon(Icons.lock_outline, size: size, color: cs.onSurfaceVariant));
+    }
+    if (route.verified) {
+      return Tooltip(message: 'Verified', child: Icon(Icons.verified, size: size, color: cs.primary));
+    }
+    return const SizedBox.shrink();
+  }
 }

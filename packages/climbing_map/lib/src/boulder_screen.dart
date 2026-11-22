@@ -38,14 +38,15 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
   /// filters and the ticks on the rows.
   Future<void> _loadSummaries() async {
     if (!_e.signedIn) return;
-    final ids = [
+    final routes = {
       for (final p in _tree.childrenOf(widget.boulderId))
-        if (p.kind == PlaceKind.problem) p.id,
-    ];
+        if (p.kind == PlaceKind.problem) p.id: p,
+    };
+    final ids = routes.keys.toList();
     try {
       final r = await Future.wait([_e.opinionsOn(ids), _e.toppedByMe()]);
       if (!mounted) return;
-      setState(() => _summaries = routeSummaries(ids, r[0] as List<(String, Opinion)>, r[1] as Set<String>, _e.me));
+      setState(() => _summaries = routeSummaries(ids, r[0] as List<(String, Opinion)>, r[1] as Set<String>, _e.me, routes: routes));
     } catch (_) {} // the list works without them
   }
 
@@ -144,7 +145,7 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
       ),
     );
     if (sure != true || !mounted) return;
-    _say('Adding the $guide guide… (uploads 4 photos)');
+    _say('Adding the $guide guide… (uploads its photos)');
     final err = await _e.importGuide(guide, b);
     if (!mounted) return;
     _say(err ?? 'Added the $guide guide.');
@@ -166,9 +167,17 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
         Navigator.pop(context);
         widget.onEditShape?.call(b);
       case _BoulderAction.guide:
-        for (final g in _e.guides) {
-          await _importGuide(b, g);
-        }
+        final guides = _e.guides;
+        final g = guides.length == 1
+            ? guides.single
+            : await showDialog<String>(
+                context: context,
+                builder: (context) => SimpleDialog(
+                  title: Text('Add a guide to ${b.name}'),
+                  children: [for (final g in guides) SimpleDialogOption(onPressed: () => Navigator.pop(context, g), child: Text(g))],
+                ),
+              );
+        if (g != null && mounted) await _importGuide(b, g);
       case _BoulderAction.delete:
         Navigator.pop(context);
         widget.onDelete?.call(b);
@@ -250,7 +259,8 @@ class _BoulderScreenState extends State<BoulderScreen> with SingleTickerProvider
               if (b.geometry != null) const PopupMenuItem(value: _BoulderAction.mapy, child: Text('Open in Mapy.com')),
               if (mine) const PopupMenuItem(value: _BoulderAction.rename, child: Text('Rename')),
               if (mine && widget.onEditShape != null) const PopupMenuItem(value: _BoulderAction.shape, child: Text('Edit shape on the map')),
-              if (_e.isAdmin && _e.guides.isNotEmpty) PopupMenuItem(value: _BoulderAction.guide, child: Text('Add the ${_e.guides.first} guide')),
+              if (_e.isAdmin && _e.guides.isNotEmpty)
+                PopupMenuItem(value: _BoulderAction.guide, child: Text(_e.guides.length == 1 ? 'Add the ${_e.guides.first} guide' : 'Add a guide')),
               if (mine && widget.onDelete != null) const PopupMenuItem(value: _BoulderAction.delete, child: Text('Delete boulder')),
             ],
           ),

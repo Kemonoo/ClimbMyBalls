@@ -219,6 +219,7 @@ class Topo {
     this.lines = const [],
     this.overlay = const TopoOverlay(),
     this.createdBy,
+    this.angleOf,
   });
 
   final String id, placeId, photoPath;
@@ -234,6 +235,10 @@ class Topo {
   /// The guide's drawing, when the section came from one; empty otherwise.
   final TopoOverlay overlay;
   final String? createdBy;
+
+  /// Another photo of the section with this id, from a different angle
+  /// (#469); null for a section itself.
+  final String? angleOf;
 
   double get aspect => width > 0 && height > 0 ? width / height : 4 / 3;
 
@@ -260,6 +265,7 @@ class Topo {
     lines: lines ?? this.lines,
     overlay: overlay ?? this.overlay,
     createdBy: createdBy,
+    angleOf: angleOf,
   );
 
   /// The next free letter: A, B, … Z, then AA.
@@ -475,6 +481,7 @@ class Topo {
     'marks': [for (final m in marks) m.toJson()],
     'lines': [for (final l in lines) l.toJson()],
     if (!overlay.isEmpty) 'overlay': overlay.toJson(),
+    if (angleOf != null) 'angle_of': angleOf,
   };
 
   factory Topo.fromRow(Map<String, dynamic> r) => Topo(
@@ -490,6 +497,7 @@ class Topo {
     lines: [for (final l in (r['lines'] as List? ?? const [])) TopoLine.fromJson((l as Map).cast<String, dynamic>())],
     overlay: TopoOverlay.fromJson((r['overlay'] as Map?)?.cast<String, dynamic>()),
     createdBy: r['created_by'] as String?,
+    angleOf: r['angle_of'] as String?,
   );
 }
 

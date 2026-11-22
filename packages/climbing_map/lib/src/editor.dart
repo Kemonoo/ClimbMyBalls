@@ -23,8 +23,12 @@ abstract class PlaceEditor {
   Future<String?> save(Place p);
   Future<String?> delete(Place p);
 
-  /// The sections (topos) of a boulder or wall, in order.
+  /// The sections (topos) of a boulder or wall, in order. Other angles of
+  /// a section are not among them: see [anglesOf].
   List<Topo> toposOf(String placeId);
+
+  /// The other photos of a section, from other angles (#469), oldest first.
+  List<Topo> anglesOf(Topo section) => const [];
 
   /// The section's photo, or its second photo with [original].
   ImageProvider photoOf(Topo t, {bool original = false});
@@ -68,6 +72,13 @@ abstract class PlaceEditor {
   Future<String?> addComment(String problemId, String body) async => 'Not available here.';
   Future<String?> removeComment(String id) async => 'Not available here.';
 
+  /// Makes your private route visible to everyone (#462). A place editor's
+  /// route is verified at the same time.
+  Future<String?> publish(Place p) async => 'Not available here.';
+
+  /// Sets or clears a route's check mark (#467; place editors).
+  Future<String?> setVerified(Place p, bool verified) async => 'Not available here.';
+
   /// Whether this build can keep places on the device for use without
   /// signal (#459).
   bool get canKeepOffline => false;
@@ -97,6 +108,10 @@ typedef RouteComment = ({String id, String userId, String who, String body, Date
 /// You made it, a right of yours reaches it, or you're an admin.
 bool canEdit(PlaceEditor? e, String placeId) =>
     e != null && e.signedIn && (e.isAdmin || e.mayEdit(placeId) || (e.me != null && e.createdBy(placeId) == e.me));
+
+/// An admin or a place editor: may check routes as verified. Making a route
+/// is not enough.
+bool mayVerify(PlaceEditor? e, String placeId) => e != null && e.signedIn && (e.isAdmin || e.mayEdit(placeId));
 
 /// The same for a section: by who made it, or by the place it hangs on.
 bool canEditTopo(PlaceEditor? e, Topo t) => e != null && e.signedIn && (e.isAdmin || e.mayEdit(t.placeId) || (e.me != null && t.createdBy == e.me));
@@ -223,6 +238,7 @@ Future<Place?> showNewProblemSheet(BuildContext context, Place boulder, String i
     _ => _Start.stand,
   };
   var uncertain = existing?.gradeUncertain ?? false;
+  var private = existing?.draft ?? true; // #462: new routes start private
   String? nameError, gradeError;
   return showModalBottomSheet<Place>(
     context: context,
@@ -266,6 +282,8 @@ Future<Place?> showNewProblemSheet(BuildContext context, Place boulder, String i
               source: existing?.source ?? 'manual',
               licence: existing?.licence ?? 'ODbL',
               details: details,
+              draft: existing?.draft ?? private,
+              verified: existing?.verified ?? true,
             ),
           );
         }
@@ -357,6 +375,15 @@ Future<Place?> showNewProblemSheet(BuildContext context, Place boulder, String i
                     isDense: true,
                   ),
                 ),
+                if (existing == null)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: private,
+                    onChanged: (v) => set(() => private = v!),
+                    title: const Text('Private until I publish it'),
+                    subtitle: const Text('Only you see it; publish it from its page when it is ready.'),
+                  ),
                 const SizedBox(height: 12),
                 FilledButton(onPressed: save, child: Text(existing == null ? 'Save problem' : 'Save changes')),
               ],

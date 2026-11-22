@@ -38,6 +38,12 @@ class _OfflineButtonState extends State<OfflineButton> {
               title: Text('Saved offline'),
               subtitle: Text('Its sections and photos are on this phone. New sections are fetched when you have signal.'),
             ),
+            if (kIsWeb)
+              const ListTile(
+                leading: Icon(Icons.add_to_home_screen),
+                title: Text('In a browser, add the app to your home screen'),
+                subtitle: Text('Then it opens without signal, and iPhones keep the saved photos. On iPhone: Share, then Add to Home Screen.'),
+              ),
             ListTile(leading: const Icon(Icons.refresh), title: const Text('Update now'), onTap: () => Navigator.pop(context, 'update')),
             ListTile(leading: const Icon(Icons.delete_outline), title: const Text('Remove from this phone'), onTap: () => Navigator.pop(context, 'remove')),
           ],

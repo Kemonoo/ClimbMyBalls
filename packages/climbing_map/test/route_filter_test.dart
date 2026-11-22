@@ -3,8 +3,8 @@ import 'package:climbing/places/near.dart';
 import 'package:climbing/places/place.dart';
 import 'package:climbing_map/climbing_map.dart';
 
-Opinion _o(String user, {int stars = 0, List<String> tags = const [], bool project = false}) =>
-    (userId: user, who: user, grade: '', stars: stars, tags: tags, project: project);
+Opinion _o(String user, {int stars = 0, List<String> tags = const [], bool project = false, String grade = ''}) =>
+    (userId: user, who: user, grade: grade, stars: stars, tags: tags, project: project);
 
 void main() {
   const easy = Place(id: 'e', kind: PlaceKind.problem, name: 'Easy', grade: '5B');
@@ -16,10 +16,12 @@ void main() {
     [
       ('e', _o('me', stars: 4, tags: ['crimps'], project: true)),
       ('e', _o('ema', stars: 2, tags: ['slab'])),
-      ('h', _o('ema', stars: 5)),
+      ('h', _o('ema', stars: 5, grade: '7B')),
+      ('h', _o('me', grade: '7B')),
     ],
     {'h'},
     'me',
+    routes: {'e': easy, 'h': hard, 'r': rope},
   );
 
   test('summaries: average stars, everyone\'s tags, your tick and project', () {
@@ -27,6 +29,7 @@ void main() {
     expect(s['e']!.tags, {'crimps', 'slab'});
     expect((s['h']!.topped, s['h']!.project), (true, false));
     expect(s['r']!.ratings, 0);
+    expect((s['e']!.grade, s['h']!.grade), ('', '7B'), reason: 'the community grade once people vote (#468)');
   });
 
   test('filters: show, grade range per scale, stars, tags', () {
